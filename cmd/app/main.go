@@ -4,46 +4,42 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
 	"task-manager/configs"
+	"task-manager/internal/handlers"
+	"task-manager/internal/repositories"
+	"task-manager/internal/routes"
+	"task-manager/internal/services"
 	"task-manager/pkg/database"
 )
 
 func main() {
 	cfg := configs.Load()
 
-	db, err := database.ConnectPostgres(cfg.DB.DSN())
+	databasePool, err := database.ConnectPostgres(cfg.DB.DSN())
 	if err != nil {
 		log.Printf("Warning: Database connection failed: %v\n", err)
 	} else {
-		defer db.Close()
+		defer databasePool.Close()
 	}
 
-	mux := http.NewServeMux()
+	//  dependency Injection: Database -> Repository -> Service -> Handler
+	taskRepository := repositories.NewPostgresTaskRepository(databasePool)
+	taskService := services.NewTaskService(taskRepository)
+	taskHandler := handlers.NewTaskHandler(taskService)
 
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		dbStatus := "connected"
-		if db == nil || db.Ping() != nil {
-			dbStatus = "disconnected"
-		}
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok","database":"%s"}`, dbStatus)
-	})
-
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("hello world this the main route "))
-	})
+	router := routes.SetupRouter(taskHandler, databasePool)
 
 	serverAddr := ":" + cfg.Port
 	server := &http.Server{
 		Addr:    serverAddr,
-		Handler: mux,
+		Handler: router,
 	}
 
 	fmt.Printf("Server starting in [%s] mode on http://localhost%s\n", cfg.AppEnv, serverAddr)
-	fmt.Printf("Test health check at: http://localhost%s/health\n", serverAddr)
+	fmt.Printf("API Base URL: http://localhost%s/api/v1\n", serverAddr)
+	fmt.Printf("Health check: http://localhost%s/api/v1/health\n", serverAddr)
+
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed to start: %v\n", err)
 	}
