@@ -1,270 +1,159 @@
-# Task Management Backend API
+# Go Backend Architecture and Technical Concepts Report
 
-A RESTful API built in Go (Golang) and PostgreSQL following layered architecture, dependency injection, and standard library conventions.
+This document outlines the architectural decisions, Go runtime mechanics, database management strategies, and engineering principles implemented in this backend project.
 
 ---
 
-## Architecture and Design Pattern
+## 1. Architectural Design and Component Boundaries
 
-The application enforces separation of concerns across distinct layers:
+The project implements a decoupled, layered Clean Architecture to enforce the Single Responsibility Principle (SRP) and ensure independent testability across layers.
 
 ```text
-HTTP Client (Postman / Browser)
-         │
-         ▼
-[ internal/routes ]        URL routing and API versioning (/api/v1)
-         │
-         ▼
-[ internal/handlers ]      Controllers: parse JSON, run DTO validation, return HTTP responses
-         │
-         ▼
-[ internal/services ]      Business Logic: domain rules, defaults, data transformation
-         │
-         ▼
-[ internal/repositories ]  Data Access: parameterized SQL queries, row scanning
-         │
-         ▼
-   PostgreSQL DB           Connection pooling, tables, indexes
+HTTP Request
+     │
+     ▼
+[ routes ]        URL mapping, path matching, API versioning (/api/v1)
+     │
+     ▼
+[ handlers ]      HTTP transport: JSON decoding, DTO validation, status codes
+     │
+     ▼
+[ services ]      Business logic: domain rules, defaults, data transformation
+     │
+     ▼
+[ repositories ]  Persistence: parameterized SQL execution, row scanning
+     │
+     ▼
+PostgreSQL DB     Connection pool, tables, constraints
 ```
 
-### Dependency Injection
-Dependencies are injected explicitly via constructors from the database up to the router:
-1. `pkg/database` connects to Postgres and returns a `*sql.DB` connection pool.
-2. `*sql.DB` is injected into `repositories.NewPostgresTaskRepository()`.
-3. `TaskRepository` interface is injected into `services.NewTaskService()`.
-4. `TaskService` interface is injected into `handlers.NewTaskHandler()`.
-5. `TaskHandler` is passed into `routes.SetupRouter()`.
+### Dependency Injection Pattern in Go
+Go does not require reflection-heavy IoC containers or frameworks (like Spring or NestJS). Dependencies are passed explicitly through constructors:
+1. `pkg/database` initializes the database pool (`*sql.DB`).
+2. `repositories.NewPostgresTaskRepository(databasePool)` receives the pool.
+3. `services.NewTaskService(taskRepository)` receives the `TaskRepository` interface.
+4. `handlers.NewTaskHandler(taskService)` receives the `TaskService` interface.
+5. `routes.SetupRouter(taskHandler, databasePool)` wires endpoints to the router.
+
+### Why Code to Interfaces?
+The Service layer does not depend on `PostgresTaskRepository` directly; it depends on the `TaskRepository` interface. 
+* In Go, interfaces are implemented **implicitly** (no `implements` keyword).
+* This allows the Service layer to be unit-tested using mock repositories without connecting to a real database.
 
 ---
 
-## Project Structure
+## 2. Go Runtime Mechanics and Language Fundamentals
 
-```text
-d:\golang\
-├── cmd/
-│   └── app/
-│       └── main.go                  # Application entry point and dependency wiring
-├── configs/
-│   └── config.go                # Strongly-typed environment configuration
-├── internal/                    # Private application code
-│   ├── dto/
-│   │   └── task_dto.go          # Request payloads and validation tags
-│   ├── handlers/
-│   │   └── task_handler.go      # HTTP controllers and request helpers
-│   ├── models/
-│   │   └── task.go              # Task domain entity
-│   ├── repositories/
-│   │   └── task_repository.go  # SQL queries and TaskRepository interface
-│   ├── routes/
-│   │   ├── routes.go            # Root router and health check routes
-│   │   └── task_routes.go       # Route definitions for /api/v1/tasks
-│   └── services/
-│       └── task_service.go      # Business logic implementation
-├── pkg/                         # Reusable packages (no domain logic)
-│   ├── database/
-│   │   ├── postgres.go          # Connection pool configuration and ping check
-│   │   └── schema.go            # Table creation (CREATE TABLE IF NOT EXISTS)
-│   └── validator/
-│       └── validator.go         # Struct tag validation wrapper
-├── .env                         # Local environment variables
-├── .env.example                 # Example environment template
-├── .gitignore                   # Git ignore patterns
-├── go.mod                       # Go module dependencies
-└── go.sum                       # Dependency checksums
+### Pointers vs. Values (`*` and `&`)
+* **Default Pass-by-Value:** In Go, passing a struct to a function creates a shallow copy of that struct in memory.
+* **Why Pointers are Used:**
+  * For large structs (e.g., `*models.Task`, `*http.Request`), passing a pointer (`8 bytes`) avoids duplicating data in memory.
+  * Pointers allow functions to mutate the underlying struct directly in memory (e.g., `repo.Create(ctx, task)` writes the generated database ID directly into `task.ID`).
+* **Structs vs. Interfaces:**
+  * `r *http.Request` has a pointer (`*`) because `http.Request` is a concrete data struct.
+  * `w http.ResponseWriter` does not have a pointer (`*`) because it is an **interface**. In Go, interface values already wrap an internal pointer to the underlying implementation.
+
+### The `defer` Lifecycle
+* `defer` schedules a function call to execute immediately before the surrounding function returns.
+* It does not run when defined; it runs at the exit door of the function.
+* **Critical uses in this project:**
+  * `defer databasePool.Close()` in `main.go`: ensures the connection pool is closed on application shutdown.
+  * `defer rows.Close()` in `GetAll()`: ensures database connections are returned to the pool once rows are read.
+  * `defer cancel()`: releases context timers immediately to prevent memory leaks.
+
+### Zero Values in Go
+Go initializes variables to their "zero value" instead of `null` or `undefined`:
+* `int` -> `0`
+* `string` -> `""`
+* `bool` -> `false`
+* `time.Time` -> `0001-01-01 00:00:00 UTC` (not current time)
+* **Design decision:** We use `time.Now()` or Postgres `DEFAULT NOW()` to ensure valid timestamps, and pointers (`*string`, `*TaskStatus`) in `UpdateTaskDTO` to differentiate between omitted fields (`nil`) and empty values (`""`).
+
+### Type Assertions
+In `pkg/validator`, the validation engine returns a generic `error`. Go's type assertion syntax `err.(validator.ValidationErrors)` safely inspects the concrete type behind the interface:
+```go
+validationErrors, ok := err.(validator.ValidationErrors)
+if !ok {
+    return map[string]string{"error": "invalid payload"}
+}
 ```
+The `ok` boolean prevents the application from panicking if the error is of a different concrete type.
+
+### Error Handling Philosophy
+Go avoids runtime exceptions (`try / catch / throw`) in favor of explicit error returns:
+* Functions return `(result, error)` tuples.
+* Errors are checked immediately: `if err != nil`.
+* **Sentinel Errors:** Defined at package level (`ErrTaskNotFound`, `ErrInvalidTaskID`) and checked using `errors.Is(err, target)`.
+* **Error Wrapping:** Using `fmt.Errorf("...: %w", err)` to preserve the root cause while adding layer-specific context.
 
 ---
 
-## Core Technical Concepts Implemented
+## 3. Database Management and Resource Optimization
 
-1. **Standard Library database/sql:**
-   * Uses parameterized queries (`$1, $2`) for SQL injection protection.
-   * `rows.Scan()` maps database columns directly into Go struct fields.
-   * `defer rows.Close()` ensures database connections are returned to the pool after query completion.
-2. **Connection Pooling:**
-   * Configured `SetMaxOpenConns(25)`, `SetMaxIdleConns(25)`, and `SetConnMaxLifetime(5 * time.Minute)`.
-3. **Context Cancellation:**
-   * Passes `request.Context()` to all database operations so cancelled requests immediately terminate ongoing database queries.
-4. **DTO Validation:**
-   * Uses struct tags (`validate:"required,min=1,max=100"`) to validate inputs in the handler before calling the service layer.
-5. **Sentinel Errors:**
-   * Defines domain-level errors (such as `ErrTaskNotFound`) so handlers can return appropriate HTTP status codes (e.g., 404).
+### Why `database/sql` + `pgx` Over Heavy ORMs (GORM)
+For production systems, standard `database/sql` was chosen over ORMs like GORM:
+1. **Performance:** Eliminates runtime reflection overhead.
+2. **Predictability:** Raw SQL ensures exact control over query execution plans and index utilization.
+3. **Avoids Zero-Value Gotchas:** Many ORMs fail to update zero values (e.g., setting a boolean to `false` or integer to `0`) without special update flags.
 
----
+### Connection Pool Configuration
+To prevent application traffic from crashing PostgreSQL, the connection pool is explicitly configured:
+* `SetMaxOpenConns(25)`: Sets a ceiling on active TCP connections to stay within database limits.
+* `SetMaxIdleConns(25)`: Keeps warm connections in memory to avoid the latency of TCP three-way handshakes on every request.
+* `SetConnMaxLifetime(5 * time.Minute)`: Periodically recycles connections to prevent stale connections from being terminated by firewalls or cloud load balancers.
 
-## Setup and Execution
+### Context and Query Cancellation (`context.Context`)
+Every repository query receives `ctx context.Context` derived from `request.Context()`:
+* If a client disconnects or aborts the HTTP request before the database query finishes, Go sends an interrupt signal to PostgreSQL to terminate the query.
+* This prevents wasted CPU, RAM, and database lock contention on abandoned client requests.
 
-### 1. Prerequisites
-* Go 1.22 or higher
-* PostgreSQL running on port 5432
+### SQL Injection Prevention
+All SQL queries use parameterized bind variables (`$1, $2, $3`):
+* Queries are sent as prepared statements where SQL logic and user data travel separately.
+* User input is treated strictly as literal data, making SQL injection impossible.
 
-### 2. Environment Configuration
-Create a `.env` file in the project root:
-
-```env
-PORT=8080
-APP_ENV=development
-
-POSTGRES_HOST=127.0.0.1
-POSTGRES_PORT=5432
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_password
-POSTGRES_DB=postgres
-POSTGRES_SSLMODE=disable
-```
-
-### 3. Run the Application
-```powershell
-go run .\cmd\app\main.go
-```
-
-Startup output:
-```text
-Connected to PostgreSQL successfully!
-Database table 'tasks' verified/created successfully!
-Server starting in [development] mode on http://localhost:8080
-API Base URL: http://localhost:8080/api/v1
-Health check: http://localhost:8080/api/v1/health
-```
+### Idempotent Schema Management
+Table definitions are isolated in `pkg/database/schema.go`:
+* Uses `CREATE TABLE IF NOT EXISTS tasks (...)`.
+* Executed automatically on application boot within a 5-second timeout, ensuring the database is always prepared without manual migration scripts for local runs.
 
 ---
 
-## API Endpoints (Postman Reference)
+## 4. HTTP Transport, Routing, and Validation
 
-Base URL: `http://localhost:8080`
+### Go 1.22+ Native Routing Features
+The project uses the standard library `http.ServeMux` with features introduced in Go 1.22:
+1. **Method Matching:** Routes define their HTTP verbs directly (`POST /api/v1/tasks`, `GET /api/v1/tasks`).
+2. **Path Parameter Parsing:** Path variables like `/tasks/{id}` are extracted natively using `request.PathValue("id")` without third-party routers like Gorilla Mux.
+3. **Exact Path Matching (`/{$}`):** 
+   * In Go, patterns ending with `/` act as subtree wildcards (matching all sub-paths).
+   * Using `GET /{$}` restricts the root route strictly to `/`, allowing all unrecognized URLs (like `/ll///`) to correctly return `404 Not Found`.
 
-### 1. Health Check
-* **Method:** `GET`
-* **URL:** `http://localhost:8080/api/v1/health`
-* **Status:** `200 OK`
-```json
-{
-  "status": "ok",
-  "database": "connected"
-}
-```
+### Two-Tier Validation Strategy
+1. **Transport / Format Validation (Handler Layer):**
+   * Uses DTO struct tags (`validate:"required,min=1,max=100"`).
+   * Validated as soon as JSON is decoded in the handler.
+   * Rejects malformed requests with `422 Unprocessable Entity` before invoking business services.
+2. **Business / Semantic Validation (Service Layer):**
+   * Validates business logic (e.g., verifying `taskID > 0`, verifying existence before update, applying default statuses).
 
----
-
-### 2. Create Task
-* **Method:** `POST`
-* **URL:** `http://localhost:8080/api/v1/tasks`
-* **Headers:** `Content-Type: application/json`
-* **Request Body (status is optional and defaults to 'pending'):**
-```json
-{
-  "title": "Learn Go Clean Architecture",
-  "description": "Build handlers, services, and repositories"
-}
-```
-* **Success Status:** `201 Created`
-```json
-{
-  "id": 1,
-  "title": "Learn Go Clean Architecture",
-  "description": "Build handlers, services, and repositories",
-  "status": "pending",
-  "created_at": "2026-11-04T16:28:31.123456Z",
-  "updated_at": "2026-11-04T16:28:31.123456Z"
-}
-```
-* **Validation Failure:** `422 Unprocessable Entity`
-```json
-{
-  "errors": {
-    "title": "title is required"
-  }
-}
-```
+### DRY Handler Patterns
+Repeated logic (e.g., path parameter parsing, bounds checking, JSON response serialization) is consolidated into handler utility functions:
+* `parseIDParam(request)`: centralizes `strconv.ParseInt`, parameter validation, and consistent error messaging.
+* `writeJSON(responseWriter, statusCode, data)`: standardizes `Content-Type: application/json` headers and status code writing.
 
 ---
 
-### 3. Get All Tasks
-* **Method:** `GET`
-* **URL:** `http://localhost:8080/api/v1/tasks`
-* **Status:** `200 OK`
-```json
-[
-  {
-    "id": 1,
-    "title": "Complete clean architecture",
-    "description": "Implement handlers, services, and repositories",
-    "status": "in_progress",
-    "created_at": "2026-11-04T16:28:31.123456Z",
-    "updated_at": "2026-11-04T16:28:31.123456Z"
-  }
-]
-```
+## 5. Summary of API Endpoints
 
----
+All endpoints are versioned under `/api/v1`:
 
-### 4. Get Task by ID
-* **Method:** `GET`
-* **URL:** `http://localhost:8080/api/v1/tasks/1`
-* **Success Status:** `200 OK`
-```json
-{
-  "id": 1,
-  "title": "Complete clean architecture",
-  "description": "Implement handlers, services, and repositories",
-  "status": "in_progress",
-  "created_at": "2026-11-04T16:28:31.123456Z",
-  "updated_at": "2026-11-04T16:28:31.123456Z"
-}
-```
-* **Not Found Status:** `404 Not Found`
-```json
-{
-  "error": "task not found"
-}
-```
-* **Invalid ID Status:** `400 Bad Request`
-```json
-{
-  "error": "invalid task id in path: must be a positive integer"
-}
-```
-
----
-
-### 5. Update Task
-* **Method:** `PUT`
-* **URL:** `http://localhost:8080/api/v1/tasks/1`
-* **Headers:** `Content-Type: application/json`
-* **Request Body:**
-```json
-{
-  "title": "Updated Task Title",
-  "status": "completed"
-}
-```
-* **Success Status:** `200 OK`
-```json
-{
-  "id": 1,
-  "title": "Updated Task Title",
-  "description": "Implement handlers, services, and repositories",
-  "status": "completed",
-  "created_at": "2026-11-04T16:28:31.123456Z",
-  "updated_at": "2026-11-04T16:45:10.987654Z"
-}
-```
-* **Not Found Status:** `404 Not Found`
-
----
-
-### 6. Delete Task
-* **Method:** `DELETE`
-* **URL:** `http://localhost:8080/api/v1/tasks/1`
-* **Success Status:** `200 OK`
-```json
-{
-  "message": "task deleted successfully"
-}
-```
-* **Not Found Status:** `404 Not Found`
-```json
-{
-  "error": "task not found"
-}
-```
+| Method | Endpoint | Description | Status Codes |
+| :--- | :--- | :--- | :--- |
+| **GET** | `/api/v1/health` | Service and database connectivity check | `200` |
+| **POST** | `/api/v1/tasks` | Create task (defaults status to `pending`) | `201`, `400`, `422` |
+| **GET** | `/api/v1/tasks` | Retrieve all tasks ordered by creation date | `200` |
+| **GET** | `/api/v1/tasks/{id}` | Retrieve task by primary key ID | `200`, `400`, `404` |
+| **PUT** | `/api/v1/tasks/{id}` | Update task fields (partial or full) | `200`, `400`, `404`, `422` |
+| **DELETE**| `/api/v1/tasks/{id}` | Delete task by primary key ID | `200`, `400`, `404` |
+| **GET** | `/` | Root endpoint (exact match via `/{$}`) | `200` |
