@@ -1,0 +1,25 @@
+# Environment files (contains sensitive credentials)
+.env
+.env.*
+!.env.example
+
+# Compiled binaries and executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and output
+*.test
+*.out
+
+# OS and IDE specific files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Go workspace file
+go.work
+
