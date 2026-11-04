@@ -150,21 +150,20 @@ Base URL: `http://localhost:8080`
 * **Method:** `POST`
 * **URL:** `http://localhost:8080/api/v1/tasks`
 * **Headers:** `Content-Type: application/json`
-* **Request Body:**
+* **Request Body (status is optional and defaults to 'pending'):**
 ```json
 {
-  "title": "Complete clean architecture",
-  "description": "Implement handlers, services, and repositories",
-  "status": "in_progress"
+  "title": "Learn Go Clean Architecture",
+  "description": "Build handlers, services, and repositories"
 }
 ```
 * **Success Status:** `201 Created`
 ```json
 {
   "id": 1,
-  "title": "Complete clean architecture",
-  "description": "Implement handlers, services, and repositories",
-  "status": "in_progress",
+  "title": "Learn Go Clean Architecture",
+  "description": "Build handlers, services, and repositories",
+  "status": "pending",
   "created_at": "2026-11-04T16:28:31.123456Z",
   "updated_at": "2026-11-04T16:28:31.123456Z"
 }
