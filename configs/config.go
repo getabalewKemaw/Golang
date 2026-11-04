@@ -16,9 +16,9 @@ type DBConfig struct {
 	SSLMode  string
 }
 
-func (d DBConfig) DSN() string {
+func (dbConfig DBConfig) DSN() string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		d.User, d.Password, d.Host, d.Port, d.Name, d.SSLMode)
+		dbConfig.User, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Name, dbConfig.SSLMode)
 }
 
 type Config struct {

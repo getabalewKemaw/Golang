@@ -16,7 +16,6 @@ func main() {
 		log.Printf("Warning: Database connection failed: %v\n", err)
 	} else {
 		defer db.Close()
-		fmt.Println("Connected to PostgreSQL successfully!")
 	}
 
 	mux := http.NewServeMux()

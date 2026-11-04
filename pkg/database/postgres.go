@@ -1,27 +1,35 @@
 package database
 
 import (
-	"context"      //a built in go package used to control timeouts and cancellations.
-	"database/sql" //a universal database manager used for handling conn pools and the db stuffs.
+	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" //the postgres driver from github
+	_ "github.com/jackc/pgx/v5/stdlib" // Registers pgx driver for database/sql
 )
 
-func ConnectPostgres(dsn string) (*sql.DB, error) {
-	db, err := sql.Open("pgx", dsn)
+func ConnectPostgres(connectionString string) (*sql.DB, error) {
+	databasePool, err := sql.Open("pgx", connectionString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to open database pool: %w", err)
 	}
-	db.SetMaxOpenConns(25)                 // max number of open tcp connections
-	db.SetMaxIdleConns(25)                 // max number of idle tcp connections in the pool
-	db.SetConnMaxLifetime(5 * time.Minute) // max amount of time a tcp connection may be reused
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
+	databasePool.SetMaxOpenConns(25)                 // max number of active TCP connections
+	databasePool.SetMaxIdleConns(25)                 // max number of warm standby connections in pool
+	databasePool.SetConnMaxLifetime(5 * time.Minute) // max connection reuse lifespan
+
+	connectionTimeout, cancelTimeout := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelTimeout()
+
+	if err := databasePool.PingContext(connectionTimeout); err != nil {
 		return nil, fmt.Errorf("database ping failed: %w", err)
 	}
-	return db, nil
+	fmt.Println("Connected to PostgreSQL successfully!")
+
+	if err := CreateTables(databasePool); err != nil {
+		return nil, fmt.Errorf("database table setup failed: %w", err)
+	}
+
+	return databasePool, nil
 }
