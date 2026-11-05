@@ -6,9 +6,16 @@ import (
 	"net/http"
 
 	"task-manager/internal/handlers"
+	"task-manager/internal/repositories"
 )
 
-func SetupRouter(taskHandler *handlers.TaskHandler, databasePool *sql.DB) *http.ServeMux {
+func SetupRouter(
+	taskHandler *handlers.TaskHandler,
+	authHandler *handlers.AuthHandler,
+	jwtAccessSecret string,
+	tokenRepository repositories.TokenRepository,
+	databasePool *sql.DB,
+) *http.ServeMux {
 	router := http.NewServeMux()
 
 	healthHandler := func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -31,7 +38,8 @@ func SetupRouter(taskHandler *handlers.TaskHandler, databasePool *sql.DB) *http.
 		responseWriter.Write([]byte("Task Manager API is running. Access endpoints under /api/v1/"))
 	})
 
-	RegisterTaskRoutes(router, taskHandler)
+	RegisterAuthRoutes(router, authHandler)
+	RegisterTaskRoutes(router, taskHandler, jwtAccessSecret, tokenRepository)
 
 	return router
 }

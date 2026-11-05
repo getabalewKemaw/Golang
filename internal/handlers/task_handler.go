@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"task-manager/internal/dto"
+	"task-manager/internal/middleware"
 	"task-manager/internal/repositories"
 	"task-manager/internal/services"
 )
@@ -22,8 +23,13 @@ func NewTaskHandler(taskService services.TaskService) *TaskHandler {
 }
 
 func (handler *TaskHandler) CreateTask(responseWriter http.ResponseWriter, request *http.Request) {
-	var input dto.CreateTaskDTO
+	userID, err := middleware.GetUserIDFromContext(request.Context())
+	if err != nil {
+		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
 
+	var input dto.CreateTaskDTO
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
 		return
@@ -34,7 +40,7 @@ func (handler *TaskHandler) CreateTask(responseWriter http.ResponseWriter, reque
 		return
 	}
 
-	createdTask, err := handler.taskService.CreateTask(request.Context(), input)
+	createdTask, err := handler.taskService.CreateTask(request.Context(), userID, input)
 	if err != nil {
 		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -44,13 +50,19 @@ func (handler *TaskHandler) CreateTask(responseWriter http.ResponseWriter, reque
 }
 
 func (handler *TaskHandler) GetTaskByID(responseWriter http.ResponseWriter, request *http.Request) {
+	userID, err := middleware.GetUserIDFromContext(request.Context())
+	if err != nil {
+		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
 	taskID, err := parseIDParam(request)
 	if err != nil {
 		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	task, err := handler.taskService.GetTaskByID(request.Context(), taskID)
+	task, err := handler.taskService.GetTaskByID(request.Context(), userID, taskID)
 	if err != nil {
 		if errors.Is(err, repositories.ErrTaskNotFound) {
 			writeJSON(responseWriter, http.StatusNotFound, map[string]string{"error": "task not found"})
@@ -64,7 +76,13 @@ func (handler *TaskHandler) GetTaskByID(responseWriter http.ResponseWriter, requ
 }
 
 func (handler *TaskHandler) GetAllTasks(responseWriter http.ResponseWriter, request *http.Request) {
-	tasks, err := handler.taskService.GetAllTasks(request.Context())
+	userID, err := middleware.GetUserIDFromContext(request.Context())
+	if err != nil {
+		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	tasks, err := handler.taskService.GetAllTasks(request.Context(), userID)
 	if err != nil {
 		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -74,6 +92,12 @@ func (handler *TaskHandler) GetAllTasks(responseWriter http.ResponseWriter, requ
 }
 
 func (handler *TaskHandler) UpdateTask(responseWriter http.ResponseWriter, request *http.Request) {
+	userID, err := middleware.GetUserIDFromContext(request.Context())
+	if err != nil {
+		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
 	taskID, err := parseIDParam(request)
 	if err != nil {
 		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -91,7 +115,7 @@ func (handler *TaskHandler) UpdateTask(responseWriter http.ResponseWriter, reque
 		return
 	}
 
-	updatedTask, err := handler.taskService.UpdateTask(request.Context(), taskID, input)
+	updatedTask, err := handler.taskService.UpdateTask(request.Context(), userID, taskID, input)
 	if err != nil {
 		if errors.Is(err, repositories.ErrTaskNotFound) {
 			writeJSON(responseWriter, http.StatusNotFound, map[string]string{"error": "task not found"})
@@ -105,13 +129,19 @@ func (handler *TaskHandler) UpdateTask(responseWriter http.ResponseWriter, reque
 }
 
 func (handler *TaskHandler) DeleteTask(responseWriter http.ResponseWriter, request *http.Request) {
+	userID, err := middleware.GetUserIDFromContext(request.Context())
+	if err != nil {
+		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
 	taskID, err := parseIDParam(request)
 	if err != nil {
 		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	if err := handler.taskService.DeleteTask(request.Context(), taskID); err != nil {
+	if err := handler.taskService.DeleteTask(request.Context(), userID, taskID); err != nil {
 		if errors.Is(err, repositories.ErrTaskNotFound) {
 			writeJSON(responseWriter, http.StatusNotFound, map[string]string{"error": "task not found"})
 			return

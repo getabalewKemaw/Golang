@@ -14,29 +14,45 @@ import (
 )
 
 func main() {
-	cfg := configs.Load()
+	appConfig := configs.Load()
 
-	databasePool, err := database.ConnectPostgres(cfg.DB.DSN())
+	databasePool, err := database.ConnectPostgres(appConfig.DB.DSN())
 	if err != nil {
 		log.Printf("Warning: Database connection failed: %v\n", err)
 	} else {
 		defer databasePool.Close()
 	}
 
-	//  dependency Injection: Database -> Repository -> Service -> Handler
+	// Explicit constructor-based dependency injection
+	userRepository := repositories.NewPostgresUserRepository(databasePool)
+	tokenRepository := repositories.NewPostgresTokenRepository(databasePool)
+	authService := services.NewAuthService(
+		userRepository,
+		tokenRepository,
+		appConfig.JWTAccessSecret,
+		appConfig.JWTRefreshSecret,
+	)
+	authHandler := handlers.NewAuthHandler(authService)
+
 	taskRepository := repositories.NewPostgresTaskRepository(databasePool)
 	taskService := services.NewTaskService(taskRepository)
 	taskHandler := handlers.NewTaskHandler(taskService)
 
-	router := routes.SetupRouter(taskHandler, databasePool)
+	router := routes.SetupRouter(
+		taskHandler,
+		authHandler,
+		appConfig.JWTAccessSecret,
+		tokenRepository,
+		databasePool,
+	)
 
-	serverAddr := ":" + cfg.Port
+	serverAddr := ":" + appConfig.Port
 	server := &http.Server{
 		Addr:    serverAddr,
 		Handler: router,
 	}
 
-	fmt.Printf("Server starting in [%s] mode on http://localhost%s\n", cfg.AppEnv, serverAddr)
+	fmt.Printf("Server starting in [%s] mode on http://localhost%s\n", appConfig.AppEnv, serverAddr)
 	fmt.Printf("API Base URL: http://localhost%s/api/v1\n", serverAddr)
 	fmt.Printf("Health check: http://localhost%s/api/v1/health\n", serverAddr)
 
