@@ -22,14 +22,15 @@ func (dbConfig DBConfig) DSN() string {
 }
 
 type Config struct {
-	Port   string
-	AppEnv string
-	DB     DBConfig
+	Port             string
+	AppEnv           string
+	DB               DBConfig
+	JWTAccessSecret  string
+	JWTRefreshSecret string
 }
 
 func Load() *Config {
 	_ = godotenv.Load()
-
 	dbConfig := DBConfig{
 		Host:     getEnv("POSTGRES_HOST", "localhost"),
 		Port:     getEnv("POSTGRES_PORT", "5432"),
@@ -38,14 +39,16 @@ func Load() *Config {
 		Name:     getEnv("POSTGRES_DB", "golang"),
 		SSLMode:  getEnv("POSTGRES_SSLMODE", "disable"),
 	}
+	defaultSecret := getEnv("JWT_SECRET", "default_insecure_jwt_secret_change_me")
 
 	return &Config{
-		Port:   getEnv("PORT", "8080"),
-		AppEnv: getEnv("APP_ENV", "development"),
-		DB:     dbConfig,
+		Port:             getEnv("PORT", "8080"),
+		AppEnv:           getEnv("APP_ENV", "development"),
+		DB:               dbConfig,
+		JWTAccessSecret:  getEnv("JWT_ACCESS_SECRET", defaultSecret+"_access"),
+		JWTRefreshSecret: getEnv("JWT_REFRESH_SECRET", defaultSecret+"_refresh"),
 	}
 }
-
 func getEnv(key, fallback string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
