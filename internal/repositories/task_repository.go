@@ -14,10 +14,10 @@ var ErrTaskNotFound = errors.New("task not found")
 
 type TaskRepository interface {
 	Create(ctx context.Context, task *models.Task) error
-	GetByID(ctx context.Context, taskID int64) (*models.Task, error)
-	GetAll(ctx context.Context) ([]models.Task, error)
+	GetByID(ctx context.Context, userID, taskID int64) (*models.Task, error)
+	GetAll(ctx context.Context, userID int64) ([]models.Task, error)
 	Update(ctx context.Context, task *models.Task) error
-	Delete(ctx context.Context, taskID int64) error
+	Delete(ctx context.Context, userID, taskID int64) error
 }
 
 type PostgresTaskRepository struct {
@@ -32,9 +32,10 @@ func NewPostgresTaskRepository(databasePool *sql.DB) *PostgresTaskRepository {
 
 func (repo *PostgresTaskRepository) Create(ctx context.Context, task *models.Task) error {
 	insertQuery := `
-		INSERT INTO tasks (title, description, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id;`
+		INSERT INTO tasks (user_id, title, description, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, created_at, updated_at;`
+
 	currentTime := time.Now()
 	task.CreatedAt = currentTime
 	task.UpdatedAt = currentTime
@@ -42,12 +43,13 @@ func (repo *PostgresTaskRepository) Create(ctx context.Context, task *models.Tas
 	err := repo.databasePool.QueryRowContext(
 		ctx,
 		insertQuery,
+		task.UserID,
 		task.Title,
 		task.Description,
 		task.Status,
 		task.CreatedAt,
 		task.UpdatedAt,
-	).Scan(&task.ID)
+	).Scan(&task.ID, &task.CreatedAt, &task.UpdatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to insert task: %w", err)
@@ -56,16 +58,17 @@ func (repo *PostgresTaskRepository) Create(ctx context.Context, task *models.Tas
 	return nil
 }
 
-func (repo *PostgresTaskRepository) GetByID(ctx context.Context, taskID int64) (*models.Task, error) {
+func (repo *PostgresTaskRepository) GetByID(ctx context.Context, userID, taskID int64) (*models.Task, error) {
 	selectQuery := `
-		SELECT id, title, description, status, created_at, updated_at
+		SELECT id, user_id, title, description, status, created_at, updated_at
 		FROM tasks
-		WHERE id = $1;`
+		WHERE id = $1 AND user_id = $2;`
 
 	var task models.Task
 
-	err := repo.databasePool.QueryRowContext(ctx, selectQuery, taskID).Scan(
+	err := repo.databasePool.QueryRowContext(ctx, selectQuery, taskID, userID).Scan(
 		&task.ID,
+		&task.UserID,
 		&task.Title,
 		&task.Description,
 		&task.Status,
@@ -83,15 +86,16 @@ func (repo *PostgresTaskRepository) GetByID(ctx context.Context, taskID int64) (
 	return &task, nil
 }
 
-func (repo *PostgresTaskRepository) GetAll(ctx context.Context) ([]models.Task, error) {
+func (repo *PostgresTaskRepository) GetAll(ctx context.Context, userID int64) ([]models.Task, error) {
 	selectAllQuery := `
-		SELECT id, title, description, status, created_at, updated_at
+		SELECT id, user_id, title, description, status, created_at, updated_at
 		FROM tasks
+		WHERE user_id = $1
 		ORDER BY created_at DESC;`
 
-	rows, err := repo.databasePool.QueryContext(ctx, selectAllQuery)
+	rows, err := repo.databasePool.QueryContext(ctx, selectAllQuery, userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query all tasks: %w", err)
+		return nil, fmt.Errorf("failed to query tasks for user: %w", err)
 	}
 	defer rows.Close()
 
@@ -99,8 +103,10 @@ func (repo *PostgresTaskRepository) GetAll(ctx context.Context) ([]models.Task, 
 
 	for rows.Next() {
 		var task models.Task
+
 		scanErr := rows.Scan(
 			&task.ID,
+			&task.UserID,
 			&task.Title,
 			&task.Description,
 			&task.Status,
@@ -110,6 +116,7 @@ func (repo *PostgresTaskRepository) GetAll(ctx context.Context) ([]models.Task, 
 		if scanErr != nil {
 			return nil, fmt.Errorf("failed to scan task row: %w", scanErr)
 		}
+
 		taskList = append(taskList, task)
 	}
 
@@ -124,7 +131,7 @@ func (repo *PostgresTaskRepository) Update(ctx context.Context, task *models.Tas
 	updateQuery := `
 		UPDATE tasks
 		SET title = $1, description = $2, status = $3, updated_at = $4
-		WHERE id = $5;`
+		WHERE id = $5 AND user_id = $6;`
 
 	task.UpdatedAt = time.Now()
 
@@ -136,12 +143,12 @@ func (repo *PostgresTaskRepository) Update(ctx context.Context, task *models.Tas
 		task.Status,
 		task.UpdatedAt,
 		task.ID,
+		task.UserID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to execute task update: %w", err)
 	}
 
-	// Verify that at least one row was actually updated
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("failed to verify rows affected: %w", err)
@@ -154,10 +161,12 @@ func (repo *PostgresTaskRepository) Update(ctx context.Context, task *models.Tas
 	return nil
 }
 
-func (repo *PostgresTaskRepository) Delete(ctx context.Context, taskID int64) error {
-	deleteQuery := `DELETE FROM tasks WHERE id = $1;`
+func (repo *PostgresTaskRepository) Delete(ctx context.Context, userID, taskID int64) error {
+	deleteQuery := `
+		DELETE FROM tasks 
+		WHERE id = $1 AND user_id = $2;`
 
-	result, err := repo.databasePool.ExecContext(ctx, deleteQuery, taskID)
+	result, err := repo.databasePool.ExecContext(ctx, deleteQuery, taskID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to execute task delete: %w", err)
 	}
