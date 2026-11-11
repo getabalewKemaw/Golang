@@ -35,9 +35,12 @@ d:\golang\
 │   │   ├── auth_routes.go       # Public auth endpoints under /api/v1/auth
 │   │   ├── routes.go            # Central router configuration and health checks
 │   │   └── task_routes.go       # Protected endpoints under /api/v1/tasks
-│   └── services/
-│       ├── auth_service.go      # Credential checks, password hashing, and token issuance
-│       └── task_service.go      # Business rules and user-scoped task validation
+│   ├── services/
+│   │   ├── auth_service.go      # Credential checks, password hashing, and token issuance
+│   │   └── task_service.go      # Business rules and user-scoped task validation
+│   └── workers/
+│       ├── task_event_pool.go      # Bounded worker pool for async task lifecycle events
+│       └── token_cleanup_worker.go # Periodic background worker for purging expired tokens
 ├── pkg/                         # Reusable infrastructure packages
 │   ├── auth/
 │   │   ├── password.go          # Bcrypt hashing and comparison utilities
@@ -92,6 +95,11 @@ d:\golang\
 * **DRY Parameter Parsing:** I extracted `parseIDParam(request)` in the handler package to centralize `strconv.ParseInt`, ID positivity validation, and consistent error messaging across `GET`, `PUT`, and `DELETE` endpoints.
 * **JSON Serialization Handling:** In `GetAllTasks()`, I explicitly return an empty slice `[]models.Task{}` instead of a `nil` slice when no records exist, ensuring the API returns `[]` instead of `null` in JSON responses.
 
+### Concurrency & Background Worker Pools
+* **Event-Driven Bounded Worker Pool (`internal/workers/task_event_pool.go`):** To avoid blocking HTTP handlers during task creation and status changes, I built an asynchronous worker pool with a buffered channel (`eventsQueue chan TaskEvent`). The HTTP handler uses a non-blocking `select` with `default:` to enqueue events instantly without stalling API callers.
+* **Concurrent Batch Task Creation (`POST /api/v1/tasks/batch`):** For bulk task creation, I implemented a bounded worker pool of 5 workers inside `task_service.go`. Tasks are distributed over an unbuffered jobs channel, processed concurrently, and aggregated into an indexed response report.
+* **Autonomous Periodic Token Cleanup (`internal/workers/token_cleanup_worker.go`):** To prevent the `revoked_tokens` table from growing unbounded, I created a background worker utilizing Go's `time.NewTicker` and a `select` block listening for ticker intervals and `ctx.Done()` for graceful termination.
+
 ---
 
 ## 3. Environment Configuration
@@ -132,6 +140,7 @@ All endpoints are versioned under `/api/v1`:
 | Method | Endpoint | Description | Status Codes |
 | :--- | :--- | :--- | :--- |
 | **POST** | `/api/v1/tasks` | Create task linked to authenticated user (defaults status to `pending`) | `201`, `400`, `401`, `422` |
+| **POST** | `/api/v1/tasks/batch` | Bulk create tasks concurrently via bounded worker pool | `201`, `400`, `401`, `422` |
 | **GET** | `/api/v1/tasks` | List all tasks owned by authenticated user ordered by `created_at DESC` | `200`, `401` |
 | **GET** | `/api/v1/tasks/{id}` | Fetch a task owned by authenticated user | `200`, `400`, `401`, `404` |
 | **PUT** | `/api/v1/tasks/{id}` | Update task owned by authenticated user | `200`, `400`, `401`, `404`, `422` |
