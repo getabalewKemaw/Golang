@@ -10,17 +10,21 @@ import (
 type TokenRepository interface {
 	RevokeToken(ctx context.Context, tokenHash string, tokenType string, expiresAt time.Time) error
 	IsTokenRevoked(ctx context.Context, tokenHash string) (bool, error)
+	DeleteExpiredTokens(ctx context.Context) (int64, error)
 }
+
 
 type PostgresTokenRepository struct {
 	databasePool *sql.DB
 }
+
 
 func NewPostgresTokenRepository(databasePool *sql.DB) *PostgresTokenRepository {
 	return &PostgresTokenRepository{
 		databasePool: databasePool,
 	}
 }
+
 
 func (repo *PostgresTokenRepository) RevokeToken(ctx context.Context, tokenHash string, tokenType string, expiresAt time.Time) error {
 	insertQuery := `
@@ -50,4 +54,22 @@ func (repo *PostgresTokenRepository) IsTokenRevoked(ctx context.Context, tokenHa
 	}
 
 	return isRevoked, nil
+}
+
+func (repo *PostgresTokenRepository) DeleteExpiredTokens(ctx context.Context) (int64, error) {
+	deleteQuery := `
+		DELETE FROM revoked_tokens 
+		WHERE expires_at < NOW();`
+
+	result, err := repo.databasePool.ExecContext(ctx, deleteQuery)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete expired revoked tokens: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
 }
