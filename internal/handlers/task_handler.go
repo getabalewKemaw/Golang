@@ -5,20 +5,25 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"task-manager/internal/dto"
 	"task-manager/internal/middleware"
+	"task-manager/internal/models"
 	"task-manager/internal/repositories"
 	"task-manager/internal/services"
+	"task-manager/internal/workers"
 )
 
 type TaskHandler struct {
 	taskService services.TaskService
+	eventPool   *workers.TaskEventWorkerPool
 }
 
-func NewTaskHandler(taskService services.TaskService) *TaskHandler {
+func NewTaskHandler(taskService services.TaskService, eventPool *workers.TaskEventWorkerPool) *TaskHandler {
 	return &TaskHandler{
 		taskService: taskService,
+		eventPool:   eventPool,
 	}
 }
 
@@ -46,7 +51,44 @@ func (handler *TaskHandler) CreateTask(responseWriter http.ResponseWriter, reque
 		return
 	}
 
+	if handler.eventPool != nil {
+		handler.eventPool.Enqueue(workers.TaskEvent{
+			TaskID:    createdTask.ID,
+			UserID:    createdTask.UserID,
+			Title:     createdTask.Title,
+			EventType: workers.TaskEventCreated,
+			Timestamp: time.Now(),
+		})
+	}
+
 	writeJSON(responseWriter, http.StatusCreated, createdTask)
+}
+
+func (handler *TaskHandler) CreateTasksBatch(responseWriter http.ResponseWriter, request *http.Request) {
+	userID, err := middleware.GetUserIDFromContext(request.Context())
+	if err != nil {
+		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	var input dto.BatchCreateTaskDTO
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
+		return
+	}
+
+	if validationErrors := input.Validate(); validationErrors != nil {
+		writeJSON(responseWriter, http.StatusUnprocessableEntity, map[string]any{"errors": validationErrors})
+		return
+	}
+
+	batchResponse, err := handler.taskService.BatchCreateTasks(request.Context(), userID, input)
+	if err != nil {
+		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(responseWriter, http.StatusCreated, batchResponse)
 }
 
 func (handler *TaskHandler) GetTaskByID(responseWriter http.ResponseWriter, request *http.Request) {
@@ -123,6 +165,20 @@ func (handler *TaskHandler) UpdateTask(responseWriter http.ResponseWriter, reque
 		}
 		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+
+	if handler.eventPool != nil {
+		eventType := workers.TaskEventUpdated
+		if updatedTask.Status == models.StatusCompleted {
+			eventType = workers.TaskEventCompleted
+		}
+		handler.eventPool.Enqueue(workers.TaskEvent{
+			TaskID:    updatedTask.ID,
+			UserID:    updatedTask.UserID,
+			Title:     updatedTask.Title,
+			EventType: eventType,
+			Timestamp: time.Now(),
+		})
 	}
 
 	writeJSON(responseWriter, http.StatusOK, updatedTask)

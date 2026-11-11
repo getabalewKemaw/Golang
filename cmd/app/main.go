@@ -1,21 +1,23 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"task-manager/configs"
 	"task-manager/internal/handlers"
 	"task-manager/internal/repositories"
 	"task-manager/internal/routes"
 	"task-manager/internal/services"
+	"task-manager/internal/workers"
 	"task-manager/pkg/database"
 )
 
 func main() {
 	appConfig := configs.Load()
-
 	databasePool, err := database.ConnectPostgres(appConfig.DB.DSN())
 	if err != nil {
 		log.Printf("Warning: Database connection failed: %v\n", err)
@@ -36,7 +38,21 @@ func main() {
 
 	taskRepository := repositories.NewPostgresTaskRepository(databasePool)
 	taskService := services.NewTaskService(taskRepository)
-	taskHandler := handlers.NewTaskHandler(taskService)
+
+	rootContext, cancelRootContext := context.WithCancel(context.Background())
+	defer cancelRootContext()
+
+	// Background Workers:
+	// 1. Event-driven worker pool for asynchronous task processing
+	taskEventPool := workers.NewTaskEventWorkerPool(100, 3)
+	taskEventPool.Start(rootContext)
+	defer taskEventPool.Stop()
+
+	// 2. Periodic worker for expired revoked token cleanup (Ticker + Select pattern)
+	tokenCleanupWorker := workers.NewTokenCleanupWorker(tokenRepository, 1*time.Hour)
+	tokenCleanupWorker.Start(rootContext)
+
+	taskHandler := handlers.NewTaskHandler(taskService, taskEventPool)
 
 	router := routes.SetupRouter(
 		taskHandler,

@@ -17,6 +17,7 @@ func RegisterTaskRoutes(
 	authMiddleware := middleware.RequireAuth(jwtAccessSecret, tokenRepository)
 
 	router.Handle("POST /api/v1/tasks", authMiddleware(http.HandlerFunc(taskHandler.CreateTask)))
+	router.Handle("POST /api/v1/tasks/batch", authMiddleware(http.HandlerFunc(taskHandler.CreateTasksBatch)))
 	router.Handle("GET /api/v1/tasks", authMiddleware(http.HandlerFunc(taskHandler.GetAllTasks)))
 	router.Handle("GET /api/v1/tasks/{id}", authMiddleware(http.HandlerFunc(taskHandler.GetTaskByID)))
 	router.Handle("PUT /api/v1/tasks/{id}", authMiddleware(http.HandlerFunc(taskHandler.UpdateTask)))
