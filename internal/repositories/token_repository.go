@@ -18,6 +18,8 @@ type PostgresTokenRepository struct {
 	databasePool *sql.DB
 }
 
+var _ TokenRepository = (*PostgresTokenRepository)(nil)
+
 
 func NewPostgresTokenRepository(databasePool *sql.DB) *PostgresTokenRepository {
 	return &PostgresTokenRepository{

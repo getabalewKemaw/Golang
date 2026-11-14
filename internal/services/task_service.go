@@ -30,6 +30,8 @@ type taskService struct {
 	taskRepository repositories.TaskRepository
 }
 
+var _ TaskService = (*taskService)(nil)
+
 func NewTaskService(taskRepository repositories.TaskRepository) TaskService {
 	return &taskService{
 		taskRepository: taskRepository,
@@ -106,6 +108,11 @@ func (service *taskService) UpdateTask(ctx context.Context, userID, taskID int64
 		return nil, err
 	}
 
+	// Optimistic concurrency check: if the client provided a version, verify it matches
+	if input.Version != nil && *input.Version != existingTask.Version {
+		return nil, repositories.ErrOptimisticLockConflict
+	}
+
 	if input.Title != nil {
 		existingTask.Title = strings.TrimSpace(*input.Title)
 	}
@@ -170,19 +177,33 @@ func (service *taskService) BatchCreateTasks(ctx context.Context, userID int64, 
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			for job := range jobs {
-				createdTask, err := service.CreateTask(ctx, userID, job.data)
-				if err != nil {
-					results <- dto.BatchItemResult{
-						Index:   job.index,
-						Success: false,
-						Error:   err.Error(),
+			for {
+				// Prioritize cancellation before attempting to pull the next job.
+				if ctx.Err() != nil {
+					return
+				}
+
+				select {
+				case <-ctx.Done():
+					return
+				case job, ok := <-jobs:
+					if !ok {
+						return
 					}
-				} else {
-					results <- dto.BatchItemResult{
-						Index:   job.index,
-						Success: true,
-						Task:    createdTask,
+
+					createdTask, err := service.CreateTask(ctx, userID, job.data)
+					if err != nil {
+						results <- dto.BatchItemResult{
+							Index:   job.index,
+							Success: false,
+							Error:   err.Error(),
+						}
+					} else {
+						results <- dto.BatchItemResult{
+							Index:   job.index,
+							Success: true,
+							Task:    createdTask,
+						}
 					}
 				}
 			}
@@ -190,6 +211,9 @@ func (service *taskService) BatchCreateTasks(ctx context.Context, userID int64, 
 	}
 
 	for index, taskDTO := range input.Tasks {
+		if ctx.Err() != nil {
+			break
+		}
 		jobs <- batchTaskJob{index: index, data: taskDTO}
 	}
 	close(jobs)
@@ -210,6 +234,10 @@ func (service *taskService) BatchCreateTasks(ctx context.Context, userID int64, 
 		} else {
 			failureCount++
 		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("batch task creation aborted: %w", err)
 	}
 
 	return &dto.BatchCreateResponseDTO{

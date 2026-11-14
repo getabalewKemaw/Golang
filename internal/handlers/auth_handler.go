@@ -2,14 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
+	"task-manager/internal/apperrors"
 	"task-manager/internal/dto"
-	"task-manager/internal/repositories"
 	"task-manager/internal/services"
-	"task-manager/pkg/auth"
 )
 
 type AuthHandler struct {
@@ -26,7 +24,7 @@ func (handler *AuthHandler) Register(responseWriter http.ResponseWriter, request
 	var input dto.RegisterRequestDTO
 
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
+		RespondWithError(responseWriter, apperrors.BadRequest("malformed JSON body", err))
 		return
 	}
 
@@ -37,11 +35,7 @@ func (handler *AuthHandler) Register(responseWriter http.ResponseWriter, request
 
 	authResponse, err := handler.authService.Register(request.Context(), input)
 	if err != nil {
-		if errors.Is(err, repositories.ErrDuplicateEmail) {
-			writeJSON(responseWriter, http.StatusConflict, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -52,7 +46,7 @@ func (handler *AuthHandler) Login(responseWriter http.ResponseWriter, request *h
 	var input dto.LoginRequestDTO
 
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
+		RespondWithError(responseWriter, apperrors.BadRequest("malformed JSON body", err))
 		return
 	}
 
@@ -63,11 +57,7 @@ func (handler *AuthHandler) Login(responseWriter http.ResponseWriter, request *h
 
 	authResponse, err := handler.authService.Login(request.Context(), input)
 	if err != nil {
-		if errors.Is(err, services.ErrInvalidCredentials) {
-			writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -78,7 +68,7 @@ func (handler *AuthHandler) RefreshToken(responseWriter http.ResponseWriter, req
 	var input dto.RefreshTokenRequestDTO
 
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
+		RespondWithError(responseWriter, apperrors.BadRequest("malformed JSON body", err))
 		return
 	}
 
@@ -89,11 +79,7 @@ func (handler *AuthHandler) RefreshToken(responseWriter http.ResponseWriter, req
 
 	newTokens, err := handler.authService.RefreshToken(request.Context(), input)
 	if err != nil {
-		if errors.Is(err, auth.ErrInvalidToken) || errors.Is(err, auth.ErrExpiredToken) || errors.Is(err, auth.ErrInvalidTokenType) || errors.Is(err, services.ErrTokenRevoked) {
-			writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -116,15 +102,13 @@ func (handler *AuthHandler) Logout(responseWriter http.ResponseWriter, request *
 	}
 
 	if accessTokenString == "" && input.RefreshToken == "" {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{
-			"error": "provide an access token in the Authorization header or a refresh_token in the request body",
-		})
+		RespondWithError(responseWriter, apperrors.BadRequest("provide an access token in the Authorization header or a refresh_token in the request body", nil))
 		return
 	}
 
 	err := handler.authService.Logout(request.Context(), accessTokenString, input.RefreshToken)
 	if err != nil {
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 

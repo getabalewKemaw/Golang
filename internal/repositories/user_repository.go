@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"task-manager/internal/models"
+	"task-manager/pkg/database"
 )
 
 var (
@@ -26,6 +27,8 @@ type PostgresUserRepository struct {
 	databasePool *sql.DB
 }
 
+var _ UserRepository = (*PostgresUserRepository)(nil)
+
 func NewPostgresUserRepository(databasePool *sql.DB) *PostgresUserRepository {
 	return &PostgresUserRepository{
 		databasePool: databasePool,
@@ -42,7 +45,8 @@ func (repo *PostgresUserRepository) Create(ctx context.Context, user *models.Use
 	user.CreatedAt = currentTime
 	user.UpdatedAt = currentTime
 
-	err := repo.databasePool.QueryRowContext(
+	executor := database.GetExecutor(ctx, repo.databasePool)
+	err := executor.QueryRowContext(
 		ctx,
 		insertQuery,
 		user.Email,
@@ -69,7 +73,8 @@ func (repo *PostgresUserRepository) GetByEmail(ctx context.Context, email string
 
 	var user models.User
 
-	err := repo.databasePool.QueryRowContext(ctx, selectQuery, email).Scan(
+	executor := database.GetExecutor(ctx, repo.databasePool)
+	err := executor.QueryRowContext(ctx, selectQuery, email).Scan(
 		&user.ID,
 		&user.Email,
 		&user.PasswordHash,
@@ -95,7 +100,8 @@ func (repo *PostgresUserRepository) GetByID(ctx context.Context, userID int64) (
 
 	var user models.User
 
-	err := repo.databasePool.QueryRowContext(ctx, selectQuery, userID).Scan(
+	executor := database.GetExecutor(ctx, repo.databasePool)
+	err := executor.QueryRowContext(ctx, selectQuery, userID).Scan(
 		&user.ID,
 		&user.Email,
 		&user.PasswordHash,

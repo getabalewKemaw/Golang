@@ -2,15 +2,14 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"task-manager/internal/apperrors"
 	"task-manager/internal/dto"
 	"task-manager/internal/middleware"
 	"task-manager/internal/models"
-	"task-manager/internal/repositories"
 	"task-manager/internal/services"
 	"task-manager/internal/workers"
 )
@@ -30,13 +29,13 @@ func NewTaskHandler(taskService services.TaskService, eventPool *workers.TaskEve
 func (handler *TaskHandler) CreateTask(responseWriter http.ResponseWriter, request *http.Request) {
 	userID, err := middleware.GetUserIDFromContext(request.Context())
 	if err != nil {
-		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	var input dto.CreateTaskDTO
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
+		RespondWithError(responseWriter, apperrors.BadRequest("malformed JSON body", err))
 		return
 	}
 
@@ -47,7 +46,7 @@ func (handler *TaskHandler) CreateTask(responseWriter http.ResponseWriter, reque
 
 	createdTask, err := handler.taskService.CreateTask(request.Context(), userID, input)
 	if err != nil {
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -67,13 +66,13 @@ func (handler *TaskHandler) CreateTask(responseWriter http.ResponseWriter, reque
 func (handler *TaskHandler) CreateTasksBatch(responseWriter http.ResponseWriter, request *http.Request) {
 	userID, err := middleware.GetUserIDFromContext(request.Context())
 	if err != nil {
-		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	var input dto.BatchCreateTaskDTO
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
+		RespondWithError(responseWriter, apperrors.BadRequest("malformed JSON body", err))
 		return
 	}
 
@@ -84,7 +83,7 @@ func (handler *TaskHandler) CreateTasksBatch(responseWriter http.ResponseWriter,
 
 	batchResponse, err := handler.taskService.BatchCreateTasks(request.Context(), userID, input)
 	if err != nil {
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -94,23 +93,19 @@ func (handler *TaskHandler) CreateTasksBatch(responseWriter http.ResponseWriter,
 func (handler *TaskHandler) GetTaskByID(responseWriter http.ResponseWriter, request *http.Request) {
 	userID, err := middleware.GetUserIDFromContext(request.Context())
 	if err != nil {
-		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	taskID, err := parseIDParam(request)
 	if err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	task, err := handler.taskService.GetTaskByID(request.Context(), userID, taskID)
 	if err != nil {
-		if errors.Is(err, repositories.ErrTaskNotFound) {
-			writeJSON(responseWriter, http.StatusNotFound, map[string]string{"error": "task not found"})
-			return
-		}
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -120,13 +115,13 @@ func (handler *TaskHandler) GetTaskByID(responseWriter http.ResponseWriter, requ
 func (handler *TaskHandler) GetAllTasks(responseWriter http.ResponseWriter, request *http.Request) {
 	userID, err := middleware.GetUserIDFromContext(request.Context())
 	if err != nil {
-		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	tasks, err := handler.taskService.GetAllTasks(request.Context(), userID)
 	if err != nil {
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -136,19 +131,19 @@ func (handler *TaskHandler) GetAllTasks(responseWriter http.ResponseWriter, requ
 func (handler *TaskHandler) UpdateTask(responseWriter http.ResponseWriter, request *http.Request) {
 	userID, err := middleware.GetUserIDFromContext(request.Context())
 	if err != nil {
-		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	taskID, err := parseIDParam(request)
 	if err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	var input dto.UpdateTaskDTO
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
+		RespondWithError(responseWriter, apperrors.BadRequest("malformed JSON body", err))
 		return
 	}
 
@@ -159,11 +154,7 @@ func (handler *TaskHandler) UpdateTask(responseWriter http.ResponseWriter, reque
 
 	updatedTask, err := handler.taskService.UpdateTask(request.Context(), userID, taskID, input)
 	if err != nil {
-		if errors.Is(err, repositories.ErrTaskNotFound) {
-			writeJSON(responseWriter, http.StatusNotFound, map[string]string{"error": "task not found"})
-			return
-		}
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -187,22 +178,18 @@ func (handler *TaskHandler) UpdateTask(responseWriter http.ResponseWriter, reque
 func (handler *TaskHandler) DeleteTask(responseWriter http.ResponseWriter, request *http.Request) {
 	userID, err := middleware.GetUserIDFromContext(request.Context())
 	if err != nil {
-		writeJSON(responseWriter, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	taskID, err := parseIDParam(request)
 	if err != nil {
-		writeJSON(responseWriter, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
 	if err := handler.taskService.DeleteTask(request.Context(), userID, taskID); err != nil {
-		if errors.Is(err, repositories.ErrTaskNotFound) {
-			writeJSON(responseWriter, http.StatusNotFound, map[string]string{"error": "task not found"})
-			return
-		}
-		writeJSON(responseWriter, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		RespondWithError(responseWriter, err)
 		return
 	}
 
@@ -213,14 +200,7 @@ func (handler *TaskHandler) DeleteTask(responseWriter http.ResponseWriter, reque
 func parseIDParam(request *http.Request) (int64, error) {
 	taskID, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
 	if err != nil || taskID <= 0 {
-		return 0, errors.New("invalid task id in path: must be a positive integer")
+		return 0, apperrors.BadRequest("invalid task id in path: must be a positive integer", err)
 	}
 	return taskID, nil
-}
-
-// writeJSON sets the Content-Type header and serializes data to JSON.
-func writeJSON(responseWriter http.ResponseWriter, statusCode int, data any) {
-	responseWriter.Header().Set("Content-Type", "application/json")
-	responseWriter.WriteHeader(statusCode)
-	_ = json.NewEncoder(responseWriter).Encode(data)
 }
