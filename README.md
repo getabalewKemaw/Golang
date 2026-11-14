@@ -97,8 +97,9 @@ d:\golang\
 
 ### Concurrency & Background Worker Pools
 * **Event-Driven Bounded Worker Pool (`internal/workers/task_event_pool.go`):** To avoid blocking HTTP handlers during task creation and status changes, I built an asynchronous worker pool with a buffered channel (`eventsQueue chan TaskEvent`). The HTTP handler uses a non-blocking `select` with `default:` to enqueue events instantly without stalling API callers.
-* **Concurrent Batch Task Creation (`POST /api/v1/tasks/batch`):** For bulk task creation, I implemented a bounded worker pool of 5 workers inside `task_service.go`. Tasks are distributed over an unbuffered jobs channel, processed concurrently, and aggregated into an indexed response report.
-* **Autonomous Periodic Token Cleanup (`internal/workers/token_cleanup_worker.go`):** To prevent the `revoked_tokens` table from growing unbounded, I created a background worker utilizing Go's `time.NewTicker` and a `select` block listening for ticker intervals and `ctx.Done()` for graceful termination.
+* **Concurrent Batch Task Creation (`POST /api/v1/tasks/batch`):** For bulk task creation, I implemented a bounded worker pool of 5 workers inside `task_service.go`. Tasks are distributed over a buffered jobs channel, processed concurrently with early `ctx.Done()` cancellation checks, and aggregated into an indexed response report.
+* **Autonomous Periodic Token Cleanup (`internal/workers/token_cleanup_worker.go`):** To prevent the `revoked_tokens` table from growing unbounded, I created a background worker utilizing Go's `time.NewTicker` and a `select` block listening for ticker intervals and `ctx.Done()`. Each tick executes inside an isolated helper (`runCleanupTick`) with a 10-second `context.WithTimeout` so `defer cancelTimeout()` runs after every pass rather than accumulating inside the loop.
+* **Graceful Shutdown (`cmd/app/main.go`):** I wired `signal.NotifyContext` for `os.Interrupt` and `SIGTERM`, draining active HTTP requests via `server.Shutdown()` with a 10-second timeout before stopping and draining the background task event pool cleanly.
 
 ---
 
