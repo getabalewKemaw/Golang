@@ -60,7 +60,7 @@ func (mock *mockTaskRepository) Delete(ctx context.Context, userID, taskID int64
 
 func TestGetTaskByID_ValidationErrors(testingT *testing.T) {
 	mockRepository := &mockTaskRepository{}
-	taskService := services.NewTaskService(mockRepository)
+	taskService := services.NewTaskService(mockRepository, nil)
 	testContext := context.Background()
 
 	// 1. Invalid User ID
@@ -96,7 +96,7 @@ func TestGetTaskByID_Success(testingT *testing.T) {
 		},
 	}
 
-	taskService := services.NewTaskService(mockRepository)
+	taskService := services.NewTaskService(mockRepository, nil)
 	actualTask, err := taskService.GetTaskByID(context.Background(), 1, 42)
 	if err != nil {
 		testingT.Fatalf("unexpected error fetching task: %v", err)
@@ -117,7 +117,7 @@ func TestGetTaskByID_NotFound(testingT *testing.T) {
 		},
 	}
 
-	taskService := services.NewTaskService(mockRepository)
+	taskService := services.NewTaskService(mockRepository, nil)
 	_, err := taskService.GetTaskByID(context.Background(), 1, 999)
 	if err == nil {
 		testingT.Fatal("expected error, got nil")
@@ -136,7 +136,7 @@ func TestCreateTask_Success(testingT *testing.T) {
 		},
 	}
 
-	taskService := services.NewTaskService(mockRepository)
+	taskService := services.NewTaskService(mockRepository, nil)
 	input := dto.CreateTaskDTO{
 		Title:       "Ship Production API",
 		Description: "With clean interfaces and typed errors",
@@ -158,7 +158,7 @@ func TestCreateTask_Success(testingT *testing.T) {
 
 func TestBatchCreateTasks_ContextCanceled(testingT *testing.T) {
 	mockRepository := &mockTaskRepository{}
-	taskService := services.NewTaskService(mockRepository)
+	taskService := services.NewTaskService(mockRepository, nil)
 
 	canceledContext, cancelFunc := context.WithCancel(context.Background())
 	cancelFunc() // Cancel immediately
@@ -196,7 +196,7 @@ func TestUpdateTask_OptimisticLockConflict(testingT *testing.T) {
 		},
 	}
 
-	taskService := services.NewTaskService(mockRepository)
+	taskService := services.NewTaskService(mockRepository, nil)
 	staleVersion := int64(1)
 	newTitle := "New Title"
 	input := dto.UpdateTaskDTO{
@@ -235,7 +235,7 @@ func TestUpdateTask_Success(testingT *testing.T) {
 		},
 	}
 
-	taskService := services.NewTaskService(mockRepository)
+	taskService := services.NewTaskService(mockRepository, nil)
 	matchingVersion := int64(2)
 	newTitle := "Updated Title"
 	input := dto.UpdateTaskDTO{

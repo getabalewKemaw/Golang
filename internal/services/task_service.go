@@ -2,14 +2,16 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
+	"time"
 
 	"task-manager/internal/dto"
 	"task-manager/internal/models"
 	"task-manager/internal/repositories"
+	"task-manager/pkg/cache"
 )
 
 var (
@@ -28,13 +30,18 @@ type TaskService interface {
 
 type taskService struct {
 	taskRepository repositories.TaskRepository
+	cacheService   cache.CacheService
 }
 
 var _ TaskService = (*taskService)(nil)
 
-func NewTaskService(taskRepository repositories.TaskRepository) TaskService {
+func NewTaskService(taskRepository repositories.TaskRepository, cacheService cache.CacheService) TaskService {
+	if cacheService == nil {
+		cacheService = cache.NewNoOpCache()
+	}
 	return &taskService{
 		taskRepository: taskRepository,
+		cacheService:   cacheService,
 	}
 }
 
@@ -58,6 +65,9 @@ func (service *taskService) CreateTask(ctx context.Context, userID int64, input 
 	if err := service.taskRepository.Create(ctx, task); err != nil {
 		return nil, fmt.Errorf("service failed to create task: %w", err)
 	}
+
+	// Invalidate user tasks cache on new creation
+	_ = service.cacheService.Delete(ctx, fmt.Sprintf("tasks:user:%d", userID))
 
 	return task, nil
 }
@@ -83,6 +93,17 @@ func (service *taskService) GetAllTasks(ctx context.Context, userID int64) ([]mo
 		return nil, ErrInvalidUserID
 	}
 
+	cacheKey := fmt.Sprintf("tasks:user:%d", userID)
+
+	// 1. Cache-Aside Pattern: Check if user task list exists in cache
+	if cachedData, err := service.cacheService.Get(ctx, cacheKey); err == nil && len(cachedData) > 0 {
+		var cachedTasks []models.Task
+		if unmarshalErr := json.Unmarshal(cachedData, &cachedTasks); unmarshalErr == nil {
+			return cachedTasks, nil
+		}
+	}
+
+	// 2. Cache Miss: Query PostgreSQL database
 	tasks, err := service.taskRepository.GetAll(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("service failed to fetch user tasks: %w", err)
@@ -90,6 +111,11 @@ func (service *taskService) GetAllTasks(ctx context.Context, userID int64) ([]mo
 
 	if tasks == nil {
 		tasks = []models.Task{}
+	}
+
+	// 3. Store result in Cache with 5-minute TTL
+	if encodedBytes, marshalErr := json.Marshal(tasks); marshalErr == nil {
+		_ = service.cacheService.Set(ctx, cacheKey, encodedBytes, 5*time.Minute)
 	}
 
 	return tasks, nil
@@ -127,6 +153,9 @@ func (service *taskService) UpdateTask(ctx context.Context, userID, taskID int64
 		return nil, fmt.Errorf("service failed to update task: %w", err)
 	}
 
+	// Invalidate user tasks cache on update
+	_ = service.cacheService.Delete(ctx, fmt.Sprintf("tasks:user:%d", userID))
+
 	return existingTask, nil
 }
 
@@ -142,6 +171,9 @@ func (service *taskService) DeleteTask(ctx context.Context, userID, taskID int64
 		return err
 	}
 
+	// Invalidate user tasks cache on deletion
+	_ = service.cacheService.Delete(ctx, fmt.Sprintf("tasks:user:%d", userID))
+
 	return nil
 }
 
@@ -150,100 +182,106 @@ type batchTaskJob struct {
 	data  dto.CreateTaskDTO
 }
 
-// BatchCreateTasks uses a bounded worker pool to process and insert tasks concurrently.
-func (service *taskService) BatchCreateTasks(ctx context.Context, userID int64, input dto.BatchCreateTaskDTO) (*dto.BatchCreateResponseDTO, error) {
+type batchTaskOutcome struct {
+	index int
+	task  *models.Task
+	err   error
+}
+
+func (service *taskService) BatchCreateTasks(
+	ctx context.Context,
+	userID int64,
+	input dto.BatchCreateTaskDTO,
+) (*dto.BatchCreateResponseDTO, error) {
 	if userID <= 0 {
 		return nil, ErrInvalidUserID
 	}
 
-	taskCount := len(input.Tasks)
-	if taskCount == 0 {
+	totalTasks := len(input.Tasks)
+	if totalTasks == 0 {
 		return &dto.BatchCreateResponseDTO{
-			Results: []dto.BatchItemResult{},
+			TotalProcessed: 0,
+			SuccessCount:   0,
+			FailureCount:   0,
+			Results:        []dto.BatchItemResult{},
 		}, nil
 	}
 
-	numWorkers := 5
-	if taskCount < numWorkers {
-		numWorkers = taskCount
+	workerCount := 5
+	if totalTasks < workerCount {
+		workerCount = totalTasks
 	}
 
-	jobs := make(chan batchTaskJob, taskCount)
-	results := make(chan dto.BatchItemResult, taskCount)
+	jobsChannel := make(chan batchTaskJob, totalTasks)
+	resultsChannel := make(chan batchTaskOutcome, totalTasks)
 
-	var waitGroup sync.WaitGroup
-
-	for workerID := 0; workerID < numWorkers; workerID++ {
-		waitGroup.Add(1)
+	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
 		go func() {
-			defer waitGroup.Done()
-			for {
-				// Prioritize cancellation before attempting to pull the next job.
+			for job := range jobsChannel {
 				if ctx.Err() != nil {
-					return
+					resultsChannel <- batchTaskOutcome{
+						index: job.index,
+						task:  nil,
+						err:   ctx.Err(),
+					}
+					continue
 				}
 
-				select {
-				case <-ctx.Done():
-					return
-				case job, ok := <-jobs:
-					if !ok {
-						return
-					}
-
-					createdTask, err := service.CreateTask(ctx, userID, job.data)
-					if err != nil {
-						results <- dto.BatchItemResult{
-							Index:   job.index,
-							Success: false,
-							Error:   err.Error(),
-						}
-					} else {
-						results <- dto.BatchItemResult{
-							Index:   job.index,
-							Success: true,
-							Task:    createdTask,
-						}
-					}
+				createdTask, err := service.CreateTask(ctx, userID, job.data)
+				resultsChannel <- batchTaskOutcome{
+					index: job.index,
+					task:  createdTask,
+					err:   err,
 				}
 			}
 		}()
 	}
 
-	for index, taskDTO := range input.Tasks {
-		if ctx.Err() != nil {
-			break
-		}
-		jobs <- batchTaskJob{index: index, data: taskDTO}
-	}
-	close(jobs)
-
 	go func() {
-		waitGroup.Wait()
-		close(results)
+		defer close(jobsChannel)
+		for index, taskData := range input.Tasks {
+			select {
+			case <-ctx.Done():
+				return
+			case jobsChannel <- batchTaskJob{index: index, data: taskData}:
+			}
+		}
 	}()
 
-	itemResults := make([]dto.BatchItemResult, taskCount)
+	results := make([]dto.BatchItemResult, totalTasks)
 	successCount := 0
 	failureCount := 0
 
-	for item := range results {
-		itemResults[item.Index] = item
-		if item.Success {
-			successCount++
-		} else {
-			failureCount++
+	for collectedCount := 0; collectedCount < totalTasks; collectedCount++ {
+		select {
+		case outcome := <-resultsChannel:
+			itemResult := dto.BatchItemResult{
+				Index: outcome.index,
+			}
+
+			if outcome.err != nil {
+				itemResult.Success = false
+				itemResult.Error = outcome.err.Error()
+				failureCount++
+			} else {
+				itemResult.Success = true
+				itemResult.Task = outcome.task
+				successCount++
+			}
+
+			results[outcome.index] = itemResult
+
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
 
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("batch task creation aborted: %w", err)
-	}
+	_ = service.cacheService.Delete(ctx, fmt.Sprintf("tasks:user:%d", userID))
 
 	return &dto.BatchCreateResponseDTO{
-		TotalProcessed: taskCount,
+		TotalProcessed: totalTasks,
 		SuccessCount:   successCount,
 		FailureCount:   failureCount,
-		Results:        itemResults,
+		Results:        results,
 	}, nil
 }

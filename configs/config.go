@@ -21,10 +21,21 @@ func (dbConfig DBConfig) DSN() string {
 		dbConfig.User, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Name, dbConfig.SSLMode)
 }
 
+type RedisConfig struct {
+	Host     string
+	Port     string
+	Password string
+}
+
+func (redisConfig RedisConfig) Address() string {
+	return fmt.Sprintf("%s:%s", redisConfig.Host, redisConfig.Port)
+}
+
 type Config struct {
 	Port             string
 	AppEnv           string
 	DB               DBConfig
+	Redis            RedisConfig
 	JWTAccessSecret  string
 	JWTRefreshSecret string
 }
@@ -39,16 +50,25 @@ func Load() *Config {
 		Name:     getEnv("POSTGRES_DB", "golang"),
 		SSLMode:  getEnv("POSTGRES_SSLMODE", "disable"),
 	}
+
+	redisConfig := RedisConfig{
+		Host:     getEnv("REDIS_HOST", "localhost"),
+		Port:     getEnv("REDIS_PORT", "6379"),
+		Password: getEnv("REDIS_PASSWORD", ""),
+	}
+
 	defaultSecret := getEnv("JWT_SECRET", "default_insecure_jwt_secret_change_me")
 
 	return &Config{
 		Port:             getEnv("PORT", "8080"),
 		AppEnv:           getEnv("APP_ENV", "development"),
 		DB:               dbConfig,
+		Redis:            redisConfig,
 		JWTAccessSecret:  getEnv("JWT_ACCESS_SECRET", defaultSecret+"_access"),
 		JWTRefreshSecret: getEnv("JWT_REFRESH_SECRET", defaultSecret+"_refresh"),
 	}
 }
+
 func getEnv(key, fallback string) string {
 	if val := os.Getenv(key); val != "" {
 		return val

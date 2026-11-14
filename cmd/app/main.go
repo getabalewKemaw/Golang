@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"task-manager/configs"
 	"task-manager/internal/handlers"
 	"task-manager/internal/middleware"
@@ -18,6 +20,7 @@ import (
 	"task-manager/internal/routes"
 	"task-manager/internal/services"
 	"task-manager/internal/workers"
+	"task-manager/pkg/cache"
 	"task-manager/pkg/database"
 )
 
@@ -40,6 +43,26 @@ func main() {
 		defer databasePool.Close()
 	}
 
+	// Initialize Redis Cache with graceful fallback to NoOp cache if offline
+	var cacheService cache.CacheService
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     appConfig.Redis.Address(),
+		Password: appConfig.Redis.Password,
+		DB:       0,
+	})
+
+	pingCtx, cancelPing := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelPing()
+
+	if err := redisClient.Ping(pingCtx).Err(); err != nil {
+		slog.Warn("redis offline; falling back to in-memory bypass cache", slog.Any("error", err))
+		cacheService = cache.NewNoOpCache()
+	} else {
+		slog.Info("connected to Redis cache successfully", slog.String("addr", appConfig.Redis.Address()))
+		cacheService = cache.NewRedisCache(redisClient)
+		defer redisClient.Close()
+	}
+
 	// Explicit constructor-based dependency injection
 	transactor := database.NewPostgresTransactor(databasePool)
 	userRepository := repositories.NewPostgresUserRepository(databasePool)
@@ -55,7 +78,7 @@ func main() {
 		appConfig.JWTRefreshSecret,
 	)
 	authHandler := handlers.NewAuthHandler(authService)
-	taskService := services.NewTaskService(taskRepository)
+	taskService := services.NewTaskService(taskRepository, cacheService)
 
 	signalContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
