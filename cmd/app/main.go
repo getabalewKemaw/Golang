@@ -80,9 +80,15 @@ func main() {
 		databasePool,
 	)
 
-	// Global HTTP middleware pipeline: RequestID -> Logging -> Router
+	// Initialize global IP rate limiter: 10 requests/second sustained, 20 burst
+	ipRateLimiter := middleware.NewIPRateLimiter(10.0, 20.0)
+
+	// Global HTTP middleware pipeline:
+	// RequestID -> Recovery -> Logging -> RateLimiting -> Router
 	var rootHandler http.Handler = router
+	rootHandler = middleware.RateLimiterMiddleware(ipRateLimiter)(rootHandler)
 	rootHandler = middleware.LoggingMiddleware(rootHandler)
+	rootHandler = middleware.RecoveryMiddleware(rootHandler)
 	rootHandler = middleware.RequestIDMiddleware(rootHandler)
 
 	serverAddr := ":" + appConfig.Port

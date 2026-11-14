@@ -3,6 +3,7 @@ package middleware_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"task-manager/internal/middleware"
@@ -85,3 +86,66 @@ func TestLoggingMiddleware_ExecutesHandlerAndRecordsStatus(testingT *testing.T) 
 	}
 }
 
+func TestRecoveryMiddleware_RecoversFromPanic(testingT *testing.T) {
+	panickingHandler := http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		panic("simulated fatal nil pointer dereference!")
+	})
+
+	wrappedHandler := middleware.RecoveryMiddleware(panickingHandler)
+
+	request := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	recorder := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		testingT.Errorf("expected status 500, got %d", recorder.Code)
+	}
+
+	expectedSubstring := `"error":"internal server error"`
+	if !strings.Contains(recorder.Body.String(), expectedSubstring) {
+		testingT.Errorf("expected response to contain %s, got: %s", expectedSubstring, recorder.Body.String())
+	}
+}
+
+func TestRateLimiterMiddleware_AllowsUpToBurstAndRejectsExcess(testingT *testing.T) {
+	// Rate limiter configured with burst capacity of 3 tokens
+	limiter := middleware.NewIPRateLimiter(1.0, 3.0)
+	rateLimitingMiddleware := middleware.RateLimiterMiddleware(limiter)
+
+	successHandler := http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		responseWriter.WriteHeader(http.StatusOK)
+	})
+
+	wrappedHandler := rateLimitingMiddleware(successHandler)
+
+	clientAddr := "192.168.1.100:54321"
+
+	// 1. First 3 requests (within burst) should all succeed
+	for requestIndex := 1; requestIndex <= 3; requestIndex++ {
+		request := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+		request.RemoteAddr = clientAddr
+		recorder := httptest.NewRecorder()
+
+		wrappedHandler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			testingT.Fatalf("request %d: expected status 200, got %d", requestIndex, recorder.Code)
+		}
+	}
+
+	// 2. 4th request (exceeds burst capacity) should be rejected immediately (429 Too Many Requests)
+	excessRequest := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	excessRequest.RemoteAddr = clientAddr
+	excessRecorder := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(excessRecorder, excessRequest)
+
+	if excessRecorder.Code != http.StatusTooManyRequests {
+		testingT.Fatalf("expected status 429 Too Many Requests, got %d", excessRecorder.Code)
+	}
+
+	if retryAfter := excessRecorder.Header().Get("Retry-After"); retryAfter == "" {
+		testingT.Error("expected Retry-After header in 429 response")
+	}
+}
