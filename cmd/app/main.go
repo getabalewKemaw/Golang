@@ -22,6 +22,7 @@ import (
 	"task-manager/internal/workers"
 	"task-manager/pkg/cache"
 	"task-manager/pkg/database"
+	"task-manager/pkg/telemetry"
 )
 
 func main() {
@@ -41,6 +42,7 @@ func main() {
 		slog.Warn("database connection failed on startup", slog.Any("error", err))
 	} else {
 		defer databasePool.Close()
+		telemetry.RegisterDatabaseMetrics(databasePool)
 	}
 
 	// Initialize Redis Cache with graceful fallback to NoOp cache if offline
@@ -107,9 +109,10 @@ func main() {
 	ipRateLimiter := middleware.NewIPRateLimiter(10.0, 20.0)
 
 	// Global HTTP middleware pipeline:
-	// RequestID -> Recovery -> Logging -> RateLimiting -> Router
+	// RequestID -> Recovery -> Logging -> Metrics -> RateLimiting -> Router
 	var rootHandler http.Handler = router
 	rootHandler = middleware.RateLimiterMiddleware(ipRateLimiter)(rootHandler)
+	rootHandler = middleware.MetricsMiddleware(rootHandler)
 	rootHandler = middleware.LoggingMiddleware(rootHandler)
 	rootHandler = middleware.RecoveryMiddleware(rootHandler)
 	rootHandler = middleware.RequestIDMiddleware(rootHandler)

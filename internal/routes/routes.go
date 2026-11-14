@@ -7,6 +7,7 @@ import (
 
 	"task-manager/internal/handlers"
 	"task-manager/internal/repositories"
+	"task-manager/pkg/telemetry"
 )
 
 func SetupRouter(
@@ -30,6 +31,9 @@ func SetupRouter(
 
 	router.HandleFunc("GET /api/v1/health", healthHandler)
 	router.HandleFunc("GET /health", healthHandler) // Root alias
+
+	// Expose standard Prometheus metrics scrape endpoint
+	router.Handle("GET /metrics", telemetry.MetricsHandler())
 
 	// Root welcome route (exact match only via /{$})
 	router.HandleFunc("GET /{$}", func(responseWriter http.ResponseWriter, request *http.Request) {
