@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	ErrTaskNotFound             = errors.New("task not found")
-	ErrOptimisticLockConflict   = errors.New("task was modified by another transaction; reload and try again")
+	ErrTaskNotFound           = errors.New("task not found")
+	ErrOptimisticLockConflict = errors.New("task was modified by another transaction; reload and try again")
 )
 
 type TaskRepository interface {

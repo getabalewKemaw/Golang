@@ -3,8 +3,8 @@ package workers
 import (
 	"context"
 	"log"
-	"time"
 	"task-manager/internal/repositories"
+	"time"
 )
 
 const cleanupTickTimeout = 10 * time.Second

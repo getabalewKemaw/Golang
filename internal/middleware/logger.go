@@ -51,4 +51,3 @@ func LoggingMiddleware(nextHandler http.Handler) http.Handler {
 		)
 	})
 }
-

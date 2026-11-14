@@ -89,4 +89,3 @@ func (cache *NoOpCache) Delete(ctx context.Context, key string) error {
 func (cache *NoOpCache) Ping(ctx context.Context) error {
 	return nil
 }
-

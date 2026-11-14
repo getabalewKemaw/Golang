@@ -1,0 +1,107 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: auto
+
+jobs:
+  test:
+    name: Unit Tests & Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+          check-latest: true
+
+      - name: Verify Module Dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Run Go Vet (Static Analysis)
+        run: go vet ./...
+
+      - name: Run Tests with Race Detector & Coverage
+        run: |
+          go test -v -race -covermode=atomic -coverprofile=coverage.txt ./...
+
+      - name: Display Coverage Summary
+        run: |
+          go tool cover -func=coverage.txt | grep total:
+
+  lint:
+    name: Code Formatting & Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Check Code Formatting (gofmt)
+        run: |
+          DIFFS=$(gofmt -l .)
+          if [ -n "$DIFFS" ]; then
+            echo "The following files require gofmt formatting:"
+            echo "$DIFFS"
+            exit 1
+          fi
+          echo "All Go files are properly formatted."
+
+  build:
+    name: Binary & Docker Build Verification
+    runs-on: ubuntu-latest
+    needs: [ test, lint ]
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Cross-Compile Static Linux Binary
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/task-manager-api cmd/app/main.go
+          ls -lh bin/task-manager-api
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Production Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: task-manager-api:${{ github.sha }}
+
+      - name: Validate Docker Compose Configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          echo "Docker compose configuration is valid."
+

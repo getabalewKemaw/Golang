@@ -13,20 +13,17 @@ type TokenRepository interface {
 	DeleteExpiredTokens(ctx context.Context) (int64, error)
 }
 
-
 type PostgresTokenRepository struct {
 	databasePool *sql.DB
 }
 
 var _ TokenRepository = (*PostgresTokenRepository)(nil)
 
-
 func NewPostgresTokenRepository(databasePool *sql.DB) *PostgresTokenRepository {
 	return &PostgresTokenRepository{
 		databasePool: databasePool,
 	}
 }
-
 
 func (repo *PostgresTokenRepository) RevokeToken(ctx context.Context, tokenHash string, tokenType string, expiresAt time.Time) error {
 	insertQuery := `

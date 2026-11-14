@@ -108,4 +108,3 @@ func isNumeric(text string) bool {
 	}
 	return true
 }
-

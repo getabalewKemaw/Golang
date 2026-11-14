@@ -35,11 +35,22 @@ func SetupRouter(
 	// Expose standard Prometheus metrics scrape endpoint
 	router.Handle("GET /metrics", telemetry.MetricsHandler())
 
+	// Swagger / OpenAPI documentation routes
+	swaggerHandler := handlers.NewSwaggerHandler()
+	router.HandleFunc("GET /swagger/openapi.json", swaggerHandler.ServeOpenAPISpec)
+	router.HandleFunc("GET /swagger/", swaggerHandler.ServeUI)
+	router.HandleFunc("GET /swagger", func(responseWriter http.ResponseWriter, request *http.Request) {
+		http.Redirect(responseWriter, request, "/swagger/", http.StatusMovedPermanently)
+	})
+	router.HandleFunc("GET /docs", func(responseWriter http.ResponseWriter, request *http.Request) {
+		http.Redirect(responseWriter, request, "/swagger/", http.StatusMovedPermanently)
+	})
+
 	// Root welcome route (exact match only via /{$})
 	router.HandleFunc("GET /{$}", func(responseWriter http.ResponseWriter, request *http.Request) {
 		responseWriter.Header().Set("Content-Type", "text/plain")
 		responseWriter.WriteHeader(http.StatusOK)
-		responseWriter.Write([]byte("Task Manager API is running. Access endpoints under /api/v1/"))
+		responseWriter.Write([]byte("Task Manager API is running. Access endpoints under /api/v1/ or documentation at /swagger/"))
 	})
 
 	RegisterAuthRoutes(router, authHandler)

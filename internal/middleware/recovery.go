@@ -39,4 +39,3 @@ func RecoveryMiddleware(nextHandler http.Handler) http.Handler {
 		nextHandler.ServeHTTP(responseWriter, request)
 	})
 }
-

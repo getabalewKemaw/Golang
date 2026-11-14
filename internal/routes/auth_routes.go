@@ -12,4 +12,3 @@ func RegisterAuthRoutes(router *http.ServeMux, authHandler *handlers.AuthHandler
 	router.HandleFunc("POST /api/v1/auth/refresh", authHandler.RefreshToken)
 	router.HandleFunc("POST /api/v1/auth/logout", authHandler.Logout)
 }
-

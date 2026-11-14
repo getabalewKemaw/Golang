@@ -81,4 +81,3 @@ func (transactor *PostgresTransactor) WithinTransaction(
 
 	return nil
 }
-

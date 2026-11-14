@@ -37,4 +37,3 @@ func MetricsMiddleware(nextHandler http.Handler) http.Handler {
 		telemetry.HTTPRequestDuration.WithLabelValues(request.Method, normalizedPath).Observe(durationSeconds)
 	})
 }
-

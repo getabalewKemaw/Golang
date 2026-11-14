@@ -255,4 +255,3 @@ func TestUpdateTask_Success(testingT *testing.T) {
 		testingT.Errorf("expected incremented version 3, got: %d", updatedTask.Version)
 	}
 }
-

@@ -1,60 +1,88 @@
 # Task Management Backend - Architecture & Engineering Decisions
 
-This document details the architectural decisions, design rationale, and implementation choices behind this Go backend project.
+This document details the architectural decisions, design rationale, and implementation choices behind this production-grade Go backend project.
 
 ---
 
 ## 1. Project Overview and Directory Layout
 
-The project follows a modular, layered structure to strictly enforce separation of concerns:
+The project follows a modular, layered clean architecture to strictly enforce separation of concerns:
 
 ```text
 d:\golang\
+├── .github/
+│   └── workflows/
+│       └── ci.yml                   # Automated GitHub Actions CI pipeline (test, lint, build)
 ├── cmd/
 │   └── app/
-│       └── main.go                  # Application bootstrap and explicit dependency wiring
+│       └── main.go                  # Application bootstrap, DI wiring, and graceful shutdown
 ├── configs/
-│   └── config.go                # Strongly-typed environment configuration (DB, JWT secrets)
-├── internal/                    # Private domain and application logic
+│   └── config.go                    # Strongly-typed environment configuration (Postgres, Redis, JWT)
+├── deploy/                          # Infrastructure & observability provisioning
+│   ├── grafana/
+│   │   ├── dashboards/              # Pre-provisioned Task Manager live dashboards
+│   │   └── provisioning/            # Automated datasources & dashboard providers
+│   └── prometheus/
+│       └── prometheus.yml           # Prometheus pull scrape configuration (5s interval)
+├── docs/
+│   ├── docs.go                      # Embedded OpenAPI byte slice (go:embed)
+│   └── openapi.json                 # Complete OpenAPI 3.0.3 specification
+├── internal/                        # Private domain and application logic
+│   ├── apperrors/
+│   │   └── apperror.go              # Centralized typed domain errors with HTTP status mapping
 │   ├── dto/
-│   │   ├── auth_dto.go          # Auth request DTOs with validation rules and response shapes
-│   │   └── task_dto.go          # Task request DTOs with pointer fields for partial updates
+│   │   ├── auth_dto.go              # Auth request DTOs with validation rules and response shapes
+│   │   └── task_dto.go              # Task CRUD & batch DTOs with pointer fields and optimistic locking
 │   ├── handlers/
-│   │   ├── auth_handler.go      # Auth HTTP controllers (register, login, refresh, logout)
-│   │   └── task_handler.go      # Task HTTP controllers (user-scoped CRUD)
+│   │   ├── auth_handler.go          # Auth HTTP controllers (register, login, refresh, logout)
+│   │   ├── response.go              # Standard JSON response & typed error unwrapping (errors.As)
+│   │   ├── swagger_handler.go       # Embedded Swagger UI interface and raw spec provider
+│   │   └── task_handler.go          # User-scoped Task HTTP controllers
 │   ├── middleware/
-│   │   └── auth_middleware.go   # JWT bearer authentication, revocation check & context injection
+│   │   ├── auth_middleware.go       # JWT bearer authentication, revocation check & context injection
+│   │   ├── logger.go                # Structured JSON logging via log/slog with duration tracking
+│   │   ├── metrics.go               # Prometheus metrics collection middleware
+│   │   ├── rate_limiter.go          # Token Bucket IP rate limiter (HTTP 429)
+│   │   ├── recovery.go              # Panic recovery middleware with stack traces
+│   │   └── request_id.go            # Unique X-Request-ID correlation middleware
 │   ├── models/
-│   │   ├── task.go              # Pure domain task entity (linked with user_id)
-│   │   └── user.go              # Domain user entity (password hash omitted from JSON)
+│   │   ├── task.go                  # Pure domain task entity (versioned with user_id)
+│   │   └── user.go                  # Domain user entity (password hash omitted from JSON)
 │   ├── repositories/
-│   │   ├── task_repository.go  # SQL queries scoped by user_id and repository interface
-│   │   ├── token_repository.go # Revoked tokens blocklist persistence
-│   │   └── user_repository.go  # User persistence queries and unique constraint handling
+│   │   ├── task_repository.go       # SQL queries scoped by user_id and optimistic lock verification
+│   │   ├── token_repository.go      # Revoked tokens blocklist persistence
+│   │   └── user_repository.go       # User persistence queries and unique constraint handling
 │   ├── routes/
-│   │   ├── auth_routes.go       # Public auth endpoints under /api/v1/auth
-│   │   ├── routes.go            # Central router configuration and health checks
-│   │   └── task_routes.go       # Protected endpoints under /api/v1/tasks
+│   │   ├── auth_routes.go           # Public auth endpoints under /api/v1/auth
+│   │   ├── routes.go                # Central router configuration, health checks, metrics, and swagger
+│   │   └── task_routes.go           # Protected endpoints under /api/v1/tasks
 │   ├── services/
-│   │   ├── auth_service.go      # Credential checks, password hashing, and token issuance
-│   │   └── task_service.go      # Business rules and user-scoped task validation
+│   │   ├── auth_service.go          # Atomic registration, credential checks, and token issuance
+│   │   └── task_service.go          # Business rules, Redis cache-aside, and worker pool batch processing
 │   └── workers/
-│       ├── task_event_pool.go      # Bounded worker pool for async task lifecycle events
-│       └── token_cleanup_worker.go # Periodic background worker for purging expired tokens
-├── pkg/                         # Reusable infrastructure packages
+│       ├── task_event_pool.go       # Bounded worker pool for async task lifecycle events
+│       └── token_cleanup_worker.go  # Periodic background worker for purging expired tokens
+├── pkg/                             # Reusable infrastructure packages
 │   ├── auth/
-│   │   ├── password.go          # Bcrypt hashing and comparison utilities
-│   │   └── token.go             # JWT Access/Refresh token pair generation & validation
+│   │   ├── password.go              # Bcrypt hashing and comparison utilities
+│   │   └── token.go                 # JWT Access/Refresh token pair generation & validation
+│   ├── cache/
+│   │   └── cache.go                 # Redis cache-aside client with resilient NoOp fallback
 │   ├── database/
-│   │   ├── postgres.go          # Connection pool initialization and ping verification
-│   │   └── schema.go            # Idempotent DDL execution (users, tasks, foreign keys)
+│   │   ├── postgres.go              # Connection pool initialization and ping verification
+│   │   ├── schema.go                # Idempotent DDL execution (users, tasks, optimistic locking version)
+│   │   └── transactor.go            # Closure-based ACID transaction runner (WithinTransaction)
+│   ├── telemetry/
+│   │   └── metrics.go               # Prometheus metrics (Counters, Histograms, Gauges, NormalizePath)
 │   └── validator/
-│       └── validator.go         # Tag-based struct validation engine
-├── .env                         # Local environment settings
-├── .env.example                 # Example environment template
-├── .gitignore                   # Ignored files (binaries, env files)
-├── go.mod                       # Module definitions
-└── go.sum                       # Dependency checksums
+│       └── validator.go             # Tag-based struct validation engine
+├── .dockerignore
+├── .env.example                     # Environment template
+├── .gitignore                       # Ignored files (binaries, env files)
+├── Dockerfile                       # Production 15MB minimal Alpine runner image
+├── docker-compose.yml               # Multi-container orchestration (API, Postgres, Redis, Prometheus, Grafana)
+├── go.mod                           # Module definitions
+└── go.sum                           # Dependency checksums
 ```
 
 ---
@@ -62,62 +90,72 @@ d:\golang\
 ## 2. Key Engineering Decisions and Rationale
 
 ### Architecture and Layering
-* **Layered Clean Architecture:** I separated the code into `handlers`, `services`, and `repositories` so that HTTP logic, business rules, and SQL data access never leak into one another. If we migrate from PostgreSQL to another storage engine, only the repository layer changes.
-* **Constructor-Based Dependency Injection:** I avoided global state, init functions with side-effects, and reflection-based containers. Each component accepts its dependencies via an explicit constructor (`New...`), passing dependencies from the database pool up to the router in `main.go`.
-* **Interface-Driven Repositories:** I defined `TaskRepository`, `UserRepository`, and `TokenRepository` as interfaces that concrete PostgreSQL structs implement. This completely decouples business services from database drivers and makes unit testing straightforward with mocks.
-* **Pure Controllers (`internal/handlers`) vs. Routes (`internal/routes`):** I extracted route registration out of the handlers and into a dedicated `routes` package. Handlers act strictly as controllers, while URL paths, `/api/v1` versioning, and middleware chains are configured centrally.
+* **Layered Clean Architecture:** Code is partitioned into `handlers`, `services`, and `repositories` so that HTTP logic, domain rules, and SQL data access never leak into one another.
+* **Constructor-Based Dependency Injection:** Explicit constructors (`New...`) pass dependencies down the tree without hidden global state or reflection magic.
+* **Compile-Time Interface Verification:** All repositories and services assert interface implementation at compile time (`var _ Repository = (*PostgresRepository)(nil)`).
+
+### Typed Domain Errors & Error Handling
+* **Typed Error Hierarchy (`internal/apperrors`):** Domain errors (`ErrNotFound`, `ErrConflict`, `ErrUnauthorized`, `ErrValidation`) are explicitly typed and carry semantic HTTP status codes.
+* **Centralized Response Unwrapping (`internal/handlers/response.go`):** The handler layer unwraps errors using Go standard library `errors.As` and `errors.Is`, guaranteeing uniform JSON error envelopes (`code`, `message`, `details`) with zero brittle string comparisons.
+
+### ACID Transactions & Optimistic Concurrency Control
+* **Closure-Based Transactor (`pkg/database/transactor.go`):** Transactions are executed via `WithinTransaction(ctx, func(tx) error)`. If the closure returns `nil`, the transaction commits; if an error or panic occurs, it rolls back automatically.
+* **Atomic User Registration:** When a new user registers, the user record and two initial welcome tasks are inserted atomically within a single transaction.
+* **Optimistic Concurrency Control (OCC):** The `tasks` table includes a `version INT DEFAULT 1` column. Updates execute `UPDATE tasks SET ..., version = version + 1 WHERE id = $1 AND version = $currentVersion`. If another request modified the task concurrently, zero rows are affected and the service returns a typed `ErrConflict` (HTTP 409 Conflict).
 
 ### Authentication & Stateless Authorization
-* **Dual-Token Stateless Strategy (Access + Refresh):** I implemented short-lived Access Tokens (15 minutes) for API request authorization and longer-lived Refresh Tokens (7 days) for rotating credentials. This minimizes the security blast radius if an access token is intercepted while preserving smooth user sessions.
-* **Token Type Claims Guard & Explicit Expiration Verification:** I added an explicit `token_type` claim (`access` vs `refresh`) and enforced verification inside `ValidateToken()`. Furthermore, beyond standard `jwt.ParseWithClaims()` validation, I included an explicit check (`time.Now().After(claims.ExpiresAt.Time)`) to ensure expired tokens are categorically rejected with `ErrExpiredToken`.
-* **Token Invalidation on Logout (Revocation Blocklist):** To enable true logout in a stateless system, I created an idempotent `revoked_tokens` table in PostgreSQL. When calling `POST /api/v1/auth/logout`, the SHA-256 hash of the presented access token and/or refresh token is persisted alongside its expiration timestamp. Middleware and refresh endpoints verify revocation, immediately blocking revoked tokens until their natural expiration.
-* **Distinct Cryptographic Signing Secrets:** I configured separate secrets for access tokens and refresh tokens (`JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`) so that compromising one key does not compromise the entire authentication pipeline.
-* **Bcrypt Password Security:** I hashed passwords with `bcrypt` using standard cost factors. Bcrypt incorporates salt generation and intentional computational work to defend against rainbow table and brute-force attacks.
-* **JSON Leak Prevention on Domain Models:** I marked the `PasswordHash` field in `models.User` with `json:"-"`. This guarantees that password hashes are omitted if user structs are ever passed to JSON encoders.
-* **Collision-Resistant Context Keys:** In `internal/middleware/auth_middleware.go`, I defined unexported type-safe context keys (`type contextKey string`) rather than built-in strings to store authenticated user identifiers in `request.Context()`. This prevents key collisions across packages.
-* **Struct Embedding for Claims:** In `pkg/auth/token.go`, I embedded `jwt.RegisteredClaims` inside `Claims`. This leverages Go's composition to promote all standard JWT fields and methods into our custom struct without code duplication.
+* **Dual-Token Strategy (Access + Refresh):** Short-lived Access Tokens (15m) handle request authorization, while long-lived Refresh Tokens (7d) enable secure rotation.
+* **Token Invalidation on Logout (Revocation Blocklist):** Calling `POST /api/v1/auth/logout` records the token hash in PostgreSQL/Redis, immediately blocking revoked tokens from subsequent access.
+* **Bcrypt Password Security:** Strong salted bcrypt hashing with JSON exclusion (`json:"-"`) on domain models prevents credential leaks.
 
-### Database and Data Isolation
-* **Relational Foreign Key Linking:** I linked `tasks` to `users` using `user_id BIGINT REFERENCES users(id) ON DELETE CASCADE`. If a user account is removed, all associated tasks are cleaned up automatically.
-* **Multi-Tenant User Scoping:** In both `TaskRepository` and `TaskService`, I scoped all CRUD queries with `WHERE user_id = $1`. When fetching or modifying a task by ID (`WHERE id = $1 AND user_id = $2`), unauthorized access returns `404 Not Found`. This prevents information leakage regarding whether a resource exists for another user.
-* **Native `database/sql` + `pgx` Over GORM:** I opted for standard library `database/sql` with `pgx/v5` instead of an ORM like GORM to retain full control over query execution, eliminate runtime reflection overhead, and avoid ORM zero-value update pitfalls.
-* **Separation of Connection Pooling from Schema (`pkg/database`):** I separated connection management (`postgres.go`) from DDL table creation (`schema.go`) to adhere to the Single Responsibility Principle.
-* **Connection Pool Calibration:** I configured `SetMaxOpenConns(25)`, `SetMaxIdleConns(25)`, and `SetConnMaxLifetime(5 * time.Minute)` to prevent traffic surges from exhausting PostgreSQL connection limits while keeping idle connections warm.
-* **Parameterized SQL Queries:** I used `$1, $2` bind parameters across all queries to ensure SQL injection defense and take advantage of prepared statements.
-* **Resource Leak Defense (`defer rows.Close()`):** In `GetAll()`, I ensured `defer rows.Close()` is called immediately after `QueryContext()` to return connections to the pool upon query completion, followed by `rows.Err()` checking.
-* **Context Propagation (`context.Context`):** I passed `request.Context()` down through the service layer to every database query so that if a client disconnects, PostgreSQL terminates the query immediately.
-* **Idempotent DDL Schema Migrations:** In `pkg/database/schema.go`, I wrapped column additions in a PostgreSQL PL/pgSQL block (`DO $$ BEGIN IF NOT EXISTS ... THEN ALTER TABLE ... END IF; END $$;`). This guarantees safe execution on app startup without failing if the column already exists.
+### Structured Logging & Security Middleware Pipeline
+* **Contextual Correlation (`internal/middleware/request_id.go`):** Generates or propagates `X-Request-ID` across HTTP headers, context, and logs for distributed tracing.
+* **Structured JSON Logging (`internal/middleware/logger.go`):** Employs Go's `log/slog` to emit structured JSON logs with duration, status code, remote address, and bytes written.
+* **Panic Recovery (`internal/middleware/recovery.go`):** Catches uncaught runtime panics, logs full stack traces to `slog`, and returns a safe HTTP 500 without crashing the server process.
+* **Token Bucket IP Rate Limiting (`internal/middleware/rate_limiter.go`):** Enforces rate limits (10 req/s sustained, 20 burst) returning HTTP 429 to mitigate Denial-of-Service and brute-force attacks.
 
-### HTTP Transport and Validation
-* **Two-Tier Validation Strategy:** I placed format validation in the handler using DTO struct tags (`validate:"required,email"`, `validate:"required,min=8"`) so invalid requests are rejected with `422 Unprocessable Entity` before invoking the service or database layers. Domain rules remain in the service layer.
-* **DTO Pointer Semantics for Partial Updates:** In `UpdateTaskDTO`, I used pointer types (`*string`) for optional fields. In Go, an unprovided primitive string field defaults to `""`. Pointers allow distinguishing between a field that was not sent (`nil`) and a field intentionally cleared (`""`).
-* **Go 1.22+ Exact Path Matching (`/{$}`):** I used `"GET /{$}"` on the root route because a trailing slash in `http.ServeMux` acts as a wildcard catch-all. The `{$}` anchor ensures unknown routes properly return `404 Not Found`.
-* **DRY Parameter Parsing:** I extracted `parseIDParam(request)` in the handler package to centralize `strconv.ParseInt`, ID positivity validation, and consistent error messaging across `GET`, `PUT`, and `DELETE` endpoints.
-* **JSON Serialization Handling:** In `GetAllTasks()`, I explicitly return an empty slice `[]models.Task{}` instead of a `nil` slice when no records exist, ensuring the API returns `[]` instead of `null` in JSON responses.
+### High-Performance Caching (Redis Cache-Aside)
+* **Cache-Aside Pattern (`pkg/cache/cache.go`):** `GetAllTasks` checks Redis first; upon cache misses, it queries PostgreSQL and populates Redis with a 5-minute TTL.
+* **Write-Through Invalidation:** Task creation, update, and deletion immediately invalidate the user's cached task list in Redis.
+* **Resilient Fallback:** If Redis is offline or unreachable on startup, the application seamlessly falls back to an in-memory `NoOpCache` with zero downtime.
 
-### Concurrency & Background Worker Pools
-* **Event-Driven Bounded Worker Pool (`internal/workers/task_event_pool.go`):** To avoid blocking HTTP handlers during task creation and status changes, I built an asynchronous worker pool with a buffered channel (`eventsQueue chan TaskEvent`). The HTTP handler uses a non-blocking `select` with `default:` to enqueue events instantly without stalling API callers.
-* **Concurrent Batch Task Creation (`POST /api/v1/tasks/batch`):** For bulk task creation, I implemented a bounded worker pool of 5 workers inside `task_service.go`. Tasks are distributed over a buffered jobs channel, processed concurrently with early `ctx.Done()` cancellation checks, and aggregated into an indexed response report.
-* **Autonomous Periodic Token Cleanup (`internal/workers/token_cleanup_worker.go`):** To prevent the `revoked_tokens` table from growing unbounded, I created a background worker utilizing Go's `time.NewTicker` and a `select` block listening for ticker intervals and `ctx.Done()`. Each tick executes inside an isolated helper (`runCleanupTick`) with a 10-second `context.WithTimeout` so `defer cancelTimeout()` runs after every pass rather than accumulating inside the loop.
-* **Graceful Shutdown (`cmd/app/main.go`):** I wired `signal.NotifyContext` for `os.Interrupt` and `SIGTERM`, draining active HTTP requests via `server.Shutdown()` with a 10-second timeout before stopping and draining the background task event pool cleanly.
+### Full-Stack Observability (Prometheus & Grafana)
+* **Custom Prometheus Metrics (`pkg/telemetry/metrics.go`):**
+  * `task_manager_http_requests_total`: CounterVec tracking requests partitioned by method, path, and status code.
+  * `task_manager_http_request_duration_seconds`: HistogramVec measuring latency into sub-second and multi-second buckets.
+  * `task_manager_database_*_connections`: Dynamic gauges bound directly to `db.Stats()` (Open, In-Use, Idle).
+* **Cardinality Protection:** `NormalizePath` transforms dynamic URL paths (`/tasks/42` $\rightarrow$ `/tasks/:id`) to prevent time-series memory leaks in Prometheus.
+* **Automated Grafana Provisioning (`deploy/grafana/`):** Pre-configured Prometheus datasource and automated JSON dashboard visualizing throughput, status code distributions, and p50/p95/p99 latency quantiles.
+
+### Interactive API Documentation (Swagger / OpenAPI 3.0)
+* **Embedded Specification (`docs/docs.go`):** The complete OpenAPI 3.0.3 specification is compiled directly into the binary using `//go:embed`.
+* **Interactive Portal (`/swagger/`):** Serves an interactive Swagger UI with JWT Bearer authentication, request duration tracking, and live "Try it out" execution.
+
+### Continuous Integration (GitHub Actions CI)
+* **Automated Workflow (`.github/workflows/ci.yml`):**
+  * **Test Job:** Runs `go vet`, dependency verification, race detection (`-race`), and generates code coverage summaries.
+  * **Lint Job:** Validates canonical formatting across all Go files (`gofmt -l .`).
+  * **Build Job:** Cross-compiles the static Linux binary, builds the Alpine Docker image, and validates `docker compose config`.
 
 ---
 
 ## 3. Environment Configuration
 
-The application loads environment variables from a `.env` file using `github.com/joho/godotenv` with sensible fallbacks:
+The application loads environment variables from `.env` using `godotenv` with sensible defaults:
 
 | Variable | Description | Example Default |
 | :--- | :--- | :--- |
 | `PORT` | HTTP server listening port | `8080` |
 | `APP_ENV` | Environment mode (`development` / `production`) | `development` |
-| `POSTGRES_HOST` | PostgreSQL host address | `127.0.0.1` |
+| `POSTGRES_HOST` | PostgreSQL host address | `127.0.0.1` (or `postgres` in Docker) |
 | `POSTGRES_PORT` | PostgreSQL port | `5432` |
 | `POSTGRES_USER` | PostgreSQL user | `postgres` |
 | `POSTGRES_PASSWORD` | PostgreSQL password | `""` |
 | `POSTGRES_DB` | Database name | `golang` |
 | `POSTGRES_SSLMODE` | SSL connection mode | `disable` |
-| `JWT_SECRET` | Base fallback secret | `your_secret_key` |
+| `REDIS_HOST` | Redis host address | `127.0.0.1` (or `redis` in Docker) |
+| `REDIS_PORT` | Redis port | `6379` |
+| `REDIS_PASSWORD` | Redis password | `""` |
 | `JWT_ACCESS_SECRET` | Secret used to sign short-lived access tokens | `your_access_secret` |
 | `JWT_REFRESH_SECRET` | Secret used to sign long-lived refresh tokens | `your_refresh_secret` |
 
@@ -125,46 +163,68 @@ The application loads environment variables from a `.env` file using `github.com
 
 ## 4. API Endpoints Reference
 
-All endpoints are versioned under `/api/v1`:
+All application endpoints are versioned under `/api/v1`:
 
-### Public Endpoints
+### Public & System Endpoints
 | Method | Endpoint | Description | Status Codes |
 | :--- | :--- | :--- | :--- |
 | **GET** | `/api/v1/health` | Health check verifying database connectivity | `200` |
-| **POST** | `/api/v1/auth/register` | Register new user account and receive token pair | `201`, `400`, `409`, `422` |
-| **POST** | `/api/v1/auth/login` | Authenticate user credentials and receive token pair | `200`, `400`, `401`, `422` |
-| **POST** | `/api/v1/auth/refresh` | Exchange valid refresh token for a new token pair | `200`, `400`, `401`, `422` |
-| **POST** | `/api/v1/auth/logout` | Invalidate active access token and/or refresh token | `200`, `400`, `500` |
-| **GET** | `/` | Exact root match via `/{$}` | `200` |
+| **GET** | `/metrics` | Prometheus metrics scrape endpoint | `200` |
+| **GET** | `/swagger/` | Interactive Swagger UI documentation portal | `200` |
+| **GET** | `/swagger/openapi.json` | Raw OpenAPI 3.0.3 specification JSON | `200` |
+| **GET** | `/docs` | Redirects to `/swagger/` | `301` |
+| **POST** | `/api/v1/auth/register` | Atomically register user and seed welcome tasks | `201`, `400`, `409`, `422` |
+| **POST** | `/api/v1/auth/login` | Authenticate credentials and receive token pair | `200`, `400`, `401`, `422` |
+| **POST** | `/api/v1/auth/refresh` | Exchange valid refresh token for new access token | `200`, `400`, `401`, `422` |
+| **POST** | `/api/v1/auth/logout` | Revoke tokens in blacklist | `200`, `400`, `401` |
+| **GET** | `/` | Root greeting endpoint (`/{$}`) | `200` |
 
 ### Protected Endpoints (Requires `Authorization: Bearer <access_token>`)
 | Method | Endpoint | Description | Status Codes |
 | :--- | :--- | :--- | :--- |
-| **POST** | `/api/v1/tasks` | Create task linked to authenticated user (defaults status to `pending`) | `201`, `400`, `401`, `422` |
-| **POST** | `/api/v1/tasks/batch` | Bulk create tasks concurrently via bounded worker pool | `201`, `400`, `401`, `422` |
-| **GET** | `/api/v1/tasks` | List all tasks owned by authenticated user ordered by `created_at DESC` | `200`, `401` |
-| **GET** | `/api/v1/tasks/{id}` | Fetch a task owned by authenticated user | `200`, `400`, `401`, `404` |
-| **PUT** | `/api/v1/tasks/{id}` | Update task owned by authenticated user | `200`, `400`, `401`, `404`, `422` |
-| **DELETE**| `/api/v1/tasks/{id}` | Remove a task owned by authenticated user | `200`, `400`, `401`, `404` |
+| **GET** | `/api/v1/tasks` | List user tasks (optimized via Redis cache-aside) | `200`, `401` |
+| **POST** | `/api/v1/tasks` | Create task and invalidate Redis cache | `201`, `400`, `401`, `422` |
+| **POST** | `/api/v1/tasks/batch` | Concurrently create tasks via bounded worker pool | `200`, `400`, `401`, `422` |
+| **GET** | `/api/v1/tasks/{id}` | Fetch task by ID scoped to authenticated user | `200`, `400`, `401`, `404` |
+| **PUT** | `/api/v1/tasks/{id}` | Update task with Optimistic Concurrency Control | `200`, `400`, `401`, `404`, `409` |
+| **DELETE**| `/api/v1/tasks/{id}` | Remove task and invalidate cache | `204`, `400`, `401`, `404` |
 
 ---
 
-## 5. Local Setup and Execution
+## 5. Running the Application
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/getabalewKemaw/Golang.git
-   cd Golang
-   ```
+### Option A: Complete Stack via Docker Compose (Recommended)
+Spins up PostgreSQL, Redis, Go API, Prometheus, and Grafana in isolated containers:
 
-2. **Configure environment:**
-   ```bash
-   cp .env.example .env
-   # Update POSTGRES_* and JWT_* credentials in .env
-   ```
+```bash
+# 1. Prepare environment variables
+cp .env.example .env
 
-3. **Run the application:**
-   ```bash
-   go run ./cmd/app/main.go
-   ```
-   *The database schema (tables `users`, `tasks`, and `revoked_tokens`) will be automatically created on startup.*
+# 2. Build and launch all 5 containers in the background
+docker compose up -d --build
+
+# 3. Check container status
+docker compose ps
+```
+
+#### Live Access URLs:
+* **Task Manager REST API:** [http://localhost:8080](http://localhost:8080)
+* **Interactive Swagger UI:** [http://localhost:8080/swagger/](http://localhost:8080/swagger/)
+* **Prometheus Metrics Engine:** [http://localhost:9090](http://localhost:9090)
+* **Grafana Live Dashboards:** [http://localhost:3000](http://localhost:3000) *(Credentials: `admin` / `admin`)*
+
+---
+
+### Option B: Local Go Development
+Requires local PostgreSQL (5432) and Redis (6379) instances:
+
+```bash
+# 1. Install dependencies
+go mod download
+
+# 2. Run test suite with race detector
+go test -v -race ./...
+
+# 3. Start API server
+go run cmd/app/main.go
+```

@@ -127,6 +127,7 @@ func main() {
 		slog.String("env", appConfig.AppEnv),
 		slog.String("addr", serverAddr),
 		slog.String("api_base", fmt.Sprintf("http://localhost%s/api/v1", serverAddr)),
+		slog.String("swagger_docs", fmt.Sprintf("http://localhost%s/swagger/", serverAddr)),
 	)
 
 	serverErrChan := make(chan error, 1)

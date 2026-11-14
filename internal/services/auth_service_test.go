@@ -236,4 +236,3 @@ func TestLogin_InvalidCredentials(testingT *testing.T) {
 		testingT.Errorf("expected ErrInvalidCredentials for wrong password, got: %v", err)
 	}
 }
-
