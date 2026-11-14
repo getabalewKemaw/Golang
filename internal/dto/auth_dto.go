@@ -1,10 +1,9 @@
 package dto
 
 import (
-	"time"
-
 	"task-manager/pkg/auth"
 	"task-manager/pkg/validator"
+	"time"
 )
 
 type RegisterRequestDTO struct {

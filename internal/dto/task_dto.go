@@ -20,6 +20,7 @@ type UpdateTaskDTO struct {
 	Title       *string `json:"title,omitempty" validate:"omitempty,min=1,max=100"`
 	Description *string `json:"description,omitempty" validate:"omitempty,max=1000"`
 	Status      *string `json:"status,omitempty" validate:"omitempty,oneof=pending in_progress completed"`
+	Version     *int64  `json:"version,omitempty" validate:"omitempty,min=1"`
 }
 
 func (dto *UpdateTaskDTO) Validate() map[string]string {

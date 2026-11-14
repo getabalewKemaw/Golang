@@ -24,6 +24,7 @@ func CreateTables(databasePool *sql.DB) error {
 		title VARCHAR(255) NOT NULL,
 		description TEXT,
 		status VARCHAR(50) NOT NULL DEFAULT 'pending',
+		version INT NOT NULL DEFAULT 1,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
@@ -43,6 +44,13 @@ func CreateTables(databasePool *sql.DB) error {
 			WHERE table_name='tasks' AND column_name='user_id'
 		) THEN
 			ALTER TABLE tasks ADD COLUMN user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
+		END IF;
+
+		IF NOT EXISTS (
+			SELECT 1 FROM information_schema.columns 
+			WHERE table_name='tasks' AND column_name='version'
+		) THEN
+			ALTER TABLE tasks ADD COLUMN version INT NOT NULL DEFAULT 1;
 		END IF;
 	END $$;`
 
